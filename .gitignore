@@ -1,0 +1,31 @@
+# Local build/research context (never commit to the public repo)
+research/
+START_HERE.md
+docs/HANDOFF_AUDIT.md
+
+# Pulsar local state and secrets
+.pulsar/
+.env
+*.env
+auth.json
+secrets.enc
+*.pem
+id_rsa
+id_ed25519
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Logs and debug output
+*.log
+logs/
+
