@@ -2,6 +2,8 @@
 
 Status: MVP implemented and verified. 153/153 tests passing.
 
+Public repository: https://github.com/0langa/Pulsar (`origin`, branch `main`).
+
 ## Implemented
 
 - Package `pulsar_agent`, distribution `pulsar-agent`, CLI `pulsar` + `python -m pulsar_agent` (pyproject.toml, entry point).
