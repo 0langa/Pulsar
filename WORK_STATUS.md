@@ -14,7 +14,7 @@ Public repository: https://github.com/0langa/Pulsar (`origin`, branch `main`).
 | 4 | Read-only web retrieval (SSRF policy, GET-only, DDG + Brave backends) | PASS | `tests/test_web_tools.py` (32) |
 | 5 | TUI (`pulsar --tui`, textual extra, graceful fallback, modal approvals) | PASS | `tests/test_tui.py` (parser, controller, headless pilot) |
 | 6 | Repo intelligence (project map, test discovery, git awareness, progress + recovery UX) | PASS | `tests/test_intel.py`, recovery-hint tests in `tests/test_tui.py` |
-| 7 | Production hygiene (ruff, mypy, bandit, pip-audit, GitHub Actions CI, coverage) | PASS | `.github/workflows/ci.yml`, `pyproject.toml` tool sections |
+| 7 | Production hygiene (ruff, mypy, bandit, pip-audit, GitHub Actions CI, coverage) | PASS* | `.github/workflows/ci.yml`, `pyproject.toml` tool sections |
 | 8 | End-to-end verification + audit greps | PASS | commands below |
 
 ## Exact commands run (Bar 8 verification)
@@ -78,6 +78,10 @@ docker integration test                   → passed (daemon present)
 ## Deferred (per scope lock)
 
 All V1+ items (gateways, cron, dashboards, browser automation, marketplace, cloud terminals) remain out of scope. Future-improvement ideas: see `PROJECT_STATE.md`.
+
+## Known push blocker
+
+`* Bar 7` — the CI workflow `.github/workflows/ci.yml` is authored and complete but **not yet pushed**: the current git credential is a Personal Access Token without the `workflow` scope, and GitHub refuses to create/update workflow files without it. The file exists locally (git-ignored from the last commit only to unblock the push of everything else). To land it, push once with a token that has `workflow` scope, or paste the file via the GitHub web UI (Actions → new workflow). Nothing else in the pass depends on it; the same checks were run locally and pass.
 
 ## Open Questions
 
