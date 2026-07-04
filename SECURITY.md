@@ -24,7 +24,59 @@ Project files (`AGENTS.md`, `CLAUDE.md`), skills, memory files, and tool output 
 
 ## Approval model
 
-Three presets: `paranoid`, `review` (default), `trusted-local`. Even `trusted-local` requires approval for destructive commands and always enforces the hardline blocklist. There is no fully autonomous destructive mode. All approval decisions are recorded in an in-session audit log.
+Three presets: `paranoid`, `review` (default), `trusted-local`.
+
+- **paranoid** — auto-approves only workspace file reads; every terminal command (even read-only) and every mutating action requires approval.
+- **review** (default) — auto-approves reads and SAFE (read-only/test) terminal commands; asks for file writes, patches, `execute_code`, memory writes, and any mutating or risky terminal command.
+- **trusted-local** — same low-risk auto set as `review`. It additionally honors explicit, per-capability autonomy grants (`security.autonomy.allow_writes`, `allow_execute_code`, `allow_memory_writes`) and the exact-match `security.command_allowlist`.
+
+Autonomy grants are the only way to raise autonomy above `review`, they are off by default, each grant unlocks exactly one capability, and they take effect only under `trusted-local` (stricter presets ignore them). By itself, no preset auto-approves dependency installs, networked commands, or destructive commands — those are APPROVAL-tier terminal actions and require an approval or an exact allowlist entry the user configured. There is no fully autonomous destructive mode.
+
+Every terminal approval request carries the command, working directory, risk tier, human-readable reason, and whether a checkpoint will be taken first. All approval decisions and boundary triggers are recorded in an in-session audit log.
+
+### Non-overridable guarantee (defense in depth)
+
+Hardline-BLOCKED commands are refused at two independent layers: the tool refuses them before building an approval request, and `ApprovalManager.check` refuses any BLOCKED request even if an approver returns yes. No preset, autonomy grant, command allowlist, config value, prompt text, or subagent path can bypass this. This is covered by tests in `tests/test_safety_hardening.py` and `tests/test_command_risk.py`.
+
+### Subprocess environment isolation
+
+`terminal.env_mode` is `allowlist` by default: `terminal` and `execute_code` child processes (and the Docker/MCP backends) receive only a fixed baseline of non-sensitive variables plus names explicitly listed in `terminal.env_passthrough`. A secret stored in an environment variable with a bland name (e.g. `MYVALUE`) is therefore not inherited by child processes. The weaker `scrub` mode (drop only variables whose *name* matches a secret pattern) is available for compatibility but trusts variable names and can leak bland-named secrets.
+
+## Docker backend
+
+The opt-in Docker backend (`terminal.backend: docker`) adds OS-level isolation for `terminal` and `execute_code`:
+
+- containers run with `--rm`, never `--privileged`, plus `--cap-drop ALL` and `--security-opt no-new-privileges`
+- network disabled by default (`docker.network: none`), memory/cpu/pids limits applied
+- only the workspace is mounted (`rw` or `ro` per config); `PULSAR_HOME` and the rest of the filesystem are not visible
+- environment is allowlist-only (`docker.env_allowlist` holds variable *names*), forwarded as `-e NAME` so values never appear in the docker argv
+- client-side timeout with best-effort `docker kill` so a timed-out container does not keep running
+
+The hardline blocklist and approval pipeline run before either backend; Docker changes the blast radius, not the permission model. The `local` backend stays available and is documented as less isolated.
+
+## MCP client
+
+MCP support is stdio-only and off by default: a server runs only if its config entry sets `enabled: true`. Per-server config declares command, args, cwd, allowed tools, env passthrough names, and startup timeout.
+
+- server subprocesses get an allowlist-first environment (fixed baseline + declared `env_passthrough` names); undeclared secrets are never inherited
+- discovered tools are namespaced `mcp_<server>_<tool>`; `allowed_tools` filters what is exposed; unavailable or crashed servers contribute nothing to the model schema
+- every invocation passes through the approval pipeline (kind `mcp`). Auto-approval requires the explicit `security.autonomy.allow_mcp` grant *and* the `trusted-local` preset; `review`/`paranoid` always prompt
+- tool descriptions from servers are untrusted input: they are length-capped and prefixed with their origin before entering the model schema
+- all MCP output is truncated and redacted before console, session DB, and model context
+- subagents never see MCP tools
+
+MCP servers are third-party code running on your machine. Enabling one is equivalent to running that program yourself — review what you enable.
+
+## Web retrieval
+
+`web_search` / `web_extract` are read-only by construction: the implementation issues only GET requests, sends no cookies or credentials, and has no POST/upload path.
+
+- SSRF policy (default on): only http/https; loopback, private, link-local (incl. cloud metadata `169.254.169.254`), reserved, and multicast ranges are blocked for both literal IPs and every resolved address; redirects are re-validated hop by hop; `file:` and other schemes are always refused
+- `web.allow_private_urls: true` is the explicit opt-in for internal URLs; it never unlocks `file:` URLs
+- responses are size-capped (`web.max_bytes`), text-capped (`web.text_limit`), and redacted before console, session DB, and model context
+- under `paranoid`, every fetch requires approval; `review`/`trusted-local` auto-approve because the tools are read-only
+
+Web-specific limits: a fetched URL is also an outbound channel — a prompt-injected page could ask the model to encode data into a subsequent request's query string. Redaction masks known secrets in tool *output*, not in requested URLs; `paranoid` puts a human in front of every request. The SSRF check resolves DNS separately from the request, so a DNS-rebinding server could theoretically pass validation; treat `allow_private_urls` and rebinding as residual risks and keep the default policy on for untrusted content.
 
 ## Known limits
 

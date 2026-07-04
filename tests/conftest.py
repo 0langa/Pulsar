@@ -45,6 +45,13 @@ def config() -> dict:
     return deep_merge(DEFAULT_CONFIG, {})
 
 
+FULL_AUTONOMY = {
+    "allow_writes": True,
+    "allow_execute_code": True,
+    "allow_memory_writes": True,
+}
+
+
 def make_context(
     workspace: Path,
     home: Path,
@@ -54,7 +61,11 @@ def make_context(
     checkpoints=None,
     redactor: Redactor | None = None,
     is_subagent: bool = False,
+    autonomy: dict | None = None,
 ) -> ToolContext:
+    # Default: trusted-local with full autonomy grants so tool-functionality
+    # tests exercise handlers without an interactive approver. Approval-policy
+    # tests construct ApprovalManager directly instead of using this helper.
     return ToolContext(
         workspace=workspace,
         home=home,
@@ -64,7 +75,11 @@ def make_context(
             extra_read_roots=[home / "skills"],
             protected_roots=[home],
         ),
-        approvals=ApprovalManager(preset=preset, approver=approver),
+        approvals=ApprovalManager(
+            preset=preset,
+            approver=approver,
+            autonomy=FULL_AUTONOMY if autonomy is None else autonomy,
+        ),
         redactor=redactor or Redactor(),
         checkpoints=checkpoints,
         is_subagent=is_subagent,

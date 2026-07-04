@@ -16,7 +16,7 @@ from pathlib import Path
 from pulsar_agent.security.approvals import KIND_EXECUTE_CODE, ApprovalRequest
 from pulsar_agent.security.command_risk import HardlineBlocked, RiskTier, classify_command
 from pulsar_agent.tools.registry import ToolContext, ToolSpec
-from pulsar_agent.tools.terminal import scrubbed_environment
+from pulsar_agent.tools.terminal import build_subprocess_env
 
 DEFAULT_TIMEOUT = 120
 
@@ -33,11 +33,20 @@ def execute_code_handler(args: dict, context: ToolContext) -> str:
         ApprovalRequest(
             kind=KIND_EXECUTE_CODE,
             description=f"execute_code ({len(code)} chars)",
-            detail=code[:200],
+            detail=code.strip().splitlines()[0][:120] if code.strip() else "",
+            cwd=str(context.workspace),
         )
     )
     timeout = int(args.get("timeout", DEFAULT_TIMEOUT) or DEFAULT_TIMEOUT)
     timeout = min(timeout, 600)
+    backend = str(context.config.get("terminal", {}).get("backend", "local")).lower()
+    context.emit("execute_code", f"[{backend}] {len(code)} chars")
+
+    if backend == "docker":
+        from pulsar_agent.tools.docker_backend import run_python_in_docker
+
+        return run_python_in_docker(code, str(context.workspace), context.config, timeout)
+
     with tempfile.NamedTemporaryFile(
         "w", suffix=".py", delete=False, encoding="utf-8"
     ) as handle:
@@ -47,9 +56,7 @@ def execute_code_handler(args: dict, context: ToolContext) -> str:
         completed = subprocess.run(
             [sys.executable, "-I", str(script_path)],
             cwd=str(context.workspace),
-            env=scrubbed_environment(
-                context.config.get("terminal", {}).get("env_passthrough") or []
-            ),
+            env=build_subprocess_env(context.config),
             capture_output=True,
             text=True,
             errors="replace",

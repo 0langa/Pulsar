@@ -8,6 +8,7 @@ from pulsar_agent.tools import (
     file_tools,
     terminal,
     todo,
+    web_tools,
 )
 from pulsar_agent.tools.registry import ToolContext, ToolRegistry, ToolSpec
 
@@ -22,10 +23,14 @@ CORE_TOOL_NAMES = (
     "delegate_task",
 )
 
+# Read-only web retrieval: should-have extras beyond the core eight, gated
+# by `web.enabled` and hidden from subagents.
+WEB_TOOL_NAMES = ("web_search", "web_extract")
+
 
 def build_core_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    for module in (file_tools, terminal, execute_code, todo, delegate_task):
+    for module in (file_tools, terminal, execute_code, todo, delegate_task, web_tools):
         for spec in module.build_specs():
             registry.register(spec)
     return registry
@@ -45,6 +50,7 @@ def build_subagent_registry(role: str) -> ToolRegistry:
 
 __all__ = [
     "CORE_TOOL_NAMES",
+    "WEB_TOOL_NAMES",
     "ToolContext",
     "ToolRegistry",
     "ToolSpec",

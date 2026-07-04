@@ -117,15 +117,15 @@ def test_review_auto_approves_safe_terminal():
         manager.check(ApprovalRequest(kind=KIND_WRITE, description="write x"))
 
 
-def test_trusted_local_auto_writes_but_asks_destructive():
+def test_trusted_local_without_grants_asks_for_writes():
+    # Hardened: trusted-local no longer auto-approves writes by itself.
     manager = ApprovalManager(preset="trusted-local", approver=None)
-    manager.check(ApprovalRequest(kind=KIND_WRITE, description="write x"))
     with pytest.raises(ApprovalDenied):
-        manager.check(
-            ApprovalRequest(
-                kind=KIND_TERMINAL, description="pip install x", risk=RiskTier.APPROVAL
-            )
-        )
+        manager.check(ApprovalRequest(kind=KIND_WRITE, description="write x"))
+    # Low-risk local ops still auto-approve.
+    manager.check(
+        ApprovalRequest(kind=KIND_TERMINAL, description="ls", risk=RiskTier.SAFE)
+    )
 
 
 def test_denied_when_user_says_no():

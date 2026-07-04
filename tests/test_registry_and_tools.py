@@ -4,6 +4,7 @@ import pytest
 
 from pulsar_agent.tools import (
     CORE_TOOL_NAMES,
+    WEB_TOOL_NAMES,
     build_core_registry,
     build_subagent_registry,
 )
@@ -12,9 +13,14 @@ from tests.conftest import make_context
 
 
 def test_core_registry_is_capped_at_eight(context):
+    # Core stays capped at eight; web tools are config-gated extras.
     registry = build_core_registry()
-    assert sorted(registry.names()) == sorted(CORE_TOOL_NAMES)
-    assert len(registry.names()) == 8
+    assert len(CORE_TOOL_NAMES) == 8
+    assert sorted(registry.names()) == sorted(CORE_TOOL_NAMES + WEB_TOOL_NAMES)
+    enabled = {spec.name for spec in registry.enabled(context)}
+    assert enabled == set(CORE_TOOL_NAMES) | set(WEB_TOOL_NAMES)
+
+    context.config["web"]["enabled"] = False
     enabled = {spec.name for spec in registry.enabled(context)}
     assert enabled == set(CORE_TOOL_NAMES)
 

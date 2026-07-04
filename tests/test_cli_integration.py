@@ -191,6 +191,8 @@ def test_patch_and_rollback_in_temp_repo(tmp_path):
     config_path = home / "config.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["approval_preset"] = "trusted-local"
+    # Explicit, opt-in autonomy grant so the non-interactive patch is auto-approved.
+    config.setdefault("security", {}).setdefault("autonomy", {})["allow_writes"] = True
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
     result = run_cli(

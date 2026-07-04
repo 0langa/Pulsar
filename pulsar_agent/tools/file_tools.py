@@ -92,6 +92,8 @@ def write_file_handler(args: dict, context: ToolContext) -> str:
             kind=KIND_WRITE,
             description=f"write {path} ({len(content)} chars)",
             detail="file write",
+            cwd=str(context.workspace),
+            will_checkpoint=context.checkpoints is not None,
         )
     )
     _checkpoint(context, f"before write_file {path.name}")
@@ -130,7 +132,11 @@ def patch_handler(args: dict, context: ToolContext) -> str:
                 new_text += "\n"
             new_content = prefix + new_text + suffix
             context.approvals.check(
-                ApprovalRequest(kind=KIND_WRITE, description=f"patch {path}", detail="file patch")
+                ApprovalRequest(
+                    kind=KIND_WRITE, description=f"patch {path}", detail="file patch",
+                    cwd=str(context.workspace),
+                    will_checkpoint=context.checkpoints is not None,
+                )
             )
             _checkpoint(context, f"before patch {path.name}")
             path.write_text(new_content, encoding="utf-8")
@@ -142,7 +148,11 @@ def patch_handler(args: dict, context: ToolContext) -> str:
             "add surrounding context or set replace_all=true"
         )
     context.approvals.check(
-        ApprovalRequest(kind=KIND_WRITE, description=f"patch {path}", detail="file patch")
+        ApprovalRequest(
+            kind=KIND_WRITE, description=f"patch {path}", detail="file patch",
+            cwd=str(context.workspace),
+            will_checkpoint=context.checkpoints is not None,
+        )
     )
     _checkpoint(context, f"before patch {path.name}")
     replaced = count if replace_all else 1

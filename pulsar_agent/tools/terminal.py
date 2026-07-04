@@ -29,7 +29,9 @@ BASELINE_ENV_VARS = (
 
 
 def scrubbed_environment(passthrough: list[str] | None = None) -> dict[str, str]:
-    """Baseline env plus non-secret vars; secret-named vars need passthrough."""
+    """Scrub mode: baseline env + all non-secret-named vars; secret-named vars
+    are dropped unless explicitly passed through. Weaker than allowlist mode
+    because it trusts variable *names*."""
     passthrough_set = {name.upper() for name in (passthrough or [])}
     env: dict[str, str] = {}
     for name, value in os.environ.items():
@@ -41,18 +43,68 @@ def scrubbed_environment(passthrough: list[str] | None = None) -> dict[str, str]
     return env
 
 
+def allowlist_environment(passthrough: list[str] | None = None) -> dict[str, str]:
+    """Allowlist-first mode: ONLY a fixed baseline plus explicitly declared
+    passthrough vars survive. A secret with a bland name (e.g. MYVALUE) is
+    stripped because it is neither baseline nor declared."""
+    passthrough_set = {name.upper() for name in (passthrough or [])}
+    env: dict[str, str] = {}
+    for name, value in os.environ.items():
+        upper = name.upper()
+        if upper in BASELINE_ENV_VARS or upper in passthrough_set:
+            env[name] = value
+    return env
+
+
+def build_subprocess_env(config: dict) -> dict[str, str]:
+    """Build the child-process environment per config.
+
+    `terminal.env_mode`: "allowlist" (default, safest) or "scrub".
+    `terminal.env_passthrough`: variable names explicitly allowed in either mode.
+    """
+    terminal_cfg = config.get("terminal", {}) or {}
+    passthrough = terminal_cfg.get("env_passthrough") or []
+    mode = str(terminal_cfg.get("env_mode", "allowlist")).lower()
+    if mode == "scrub":
+        return scrubbed_environment(passthrough)
+    return allowlist_environment(passthrough)
+
+
 def run_scrubbed(
     command: str,
     cwd: str,
     timeout: int,
     passthrough: list[str] | None = None,
 ) -> tuple[int, str]:
+    """Back-compat helper (scrub-mode env). Prefer run_local_command."""
     try:
         completed = subprocess.run(
             command,
             shell=True,
             cwd=cwd,
             env=scrubbed_environment(passthrough),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"[command timed out after {timeout}s]"
+    output = (completed.stdout or "") + (
+        ("\n[stderr]\n" + completed.stderr) if completed.stderr else ""
+    )
+    return completed.returncode, output
+
+
+def run_local_command(command: str, cwd: str, config: dict) -> tuple[int, str]:
+    terminal_cfg = config.get("terminal", {}) or {}
+    timeout = int(terminal_cfg.get("timeout_seconds", 120))
+    try:
+        completed = subprocess.run(
+            command,
+            shell=True,
+            cwd=cwd,
+            env=build_subprocess_env(config),
             capture_output=True,
             text=True,
             errors="replace",
@@ -73,27 +125,35 @@ def terminal_handler(args: dict, context: ToolContext) -> str:
     tier, reason = classify_command(command)
     if tier is RiskTier.BLOCKED:
         raise HardlineBlocked(f"hardline blocklist ({reason}): refusing to run")
+
+    terminal_cfg = context.config.get("terminal", {}) or {}
+    backend = str(terminal_cfg.get("backend", "local")).lower()
+    will_checkpoint = tier is not RiskTier.SAFE and context.checkpoints is not None
+
     context.approvals.check(
         ApprovalRequest(
             kind=KIND_TERMINAL,
             description=command,
             risk=tier,
             detail=reason,
+            cwd=str(context.workspace),
+            will_checkpoint=will_checkpoint,
         )
     )
-    terminal_cfg = context.config.get("terminal", {})
-    if tier is not RiskTier.SAFE and context.checkpoints is not None:
+    if will_checkpoint:
         try:
             context.checkpoints.snapshot(f"before terminal: {command[:60]}")  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
             context.emit("warn", f"checkpoint failed: {exc}")
-    context.emit("terminal", command)
-    code, output = run_scrubbed(
-        command,
-        cwd=str(context.workspace),
-        timeout=int(terminal_cfg.get("timeout_seconds", 120)),
-        passthrough=terminal_cfg.get("env_passthrough") or [],
-    )
+    context.emit("terminal", f"[{backend}] {command}")
+
+    if backend == "docker":
+        from pulsar_agent.tools.docker_backend import run_in_docker
+
+        code, output = run_in_docker(command, str(context.workspace), context.config)
+    else:
+        code, output = run_local_command(command, str(context.workspace), context.config)
+
     limit = int(terminal_cfg.get("output_limit_bytes", 20000))
     if len(output) > limit:
         output = output[:limit] + "\n[output truncated]"

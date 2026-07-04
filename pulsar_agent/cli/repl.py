@@ -8,12 +8,17 @@ from pulsar_agent import __version__
 from pulsar_agent.checkpoints.store import CheckpointStore
 from pulsar_agent.config import APPROVAL_PRESETS, save_config
 from pulsar_agent.home import display_pulsar_home
+from pulsar_agent.mcp.manager import McpManager
 from pulsar_agent.memory.store import MemoryStore
 from pulsar_agent.prompt_builder import build_system_prompt
 from pulsar_agent.providers.router import parse_model_id
 from pulsar_agent.run_agent import Agent, build_agent_runtime
 from pulsar_agent.secrets import SecretStore
-from pulsar_agent.security.approvals import ApprovalManager, ApprovalRequest
+from pulsar_agent.security.approvals import (
+    ApprovalRequest,
+    autonomy_from_config,
+    build_approval_manager,
+)
 from pulsar_agent.security.paths import PathPolicy
 from pulsar_agent.security.redaction import Redactor
 from pulsar_agent.sessions.store import DB_FILENAME, SessionStore
@@ -37,9 +42,14 @@ Slash commands:
 
 
 def _console_approver(request: ApprovalRequest) -> bool:
-    print(f"\n[approval needed] {request.kind}: {request.description}")
+    print(f"\n[approval needed] {request.kind}")
+    print(f"  command : {request.description}")
+    if request.cwd:
+        print(f"  cwd     : {request.cwd}")
+    print(f"  risk    : {request.risk.value}")
     if request.detail:
-        print(f"  reason: {request.detail}")
+        print(f"  reason  : {request.detail}")
+    print(f"  checkpoint: {'yes (rollback available)' if request.will_checkpoint else 'no'}")
     answer = input("Approve? [y/N]: ").strip().lower()
     return answer in ("y", "yes")
 
@@ -66,14 +76,12 @@ class Repl:
         if config.get("checkpoints", {}).get("enabled", True):
             store = CheckpointStore(home, self.workspace)
             self.checkpoints = store if store.available() else None
-        self.approvals = ApprovalManager(
-            preset=config.get("approval_preset", "review"),
-            approver=_console_approver if interactive else None,
-            command_allowlist=list(
-                config.get("security", {}).get("command_allowlist") or []
-            ),
+        self.approvals = build_approval_manager(
+            config, _console_approver if interactive else None
         )
         self.skills = discover_skills(home)
+        self.mcp = McpManager(config, warn=lambda message: print(f"  [mcp] {message}"))
+        self.mcp.start()
         self.agent: Agent | None = None
         self.model_id: str = config.get("model", "")
         self._build_agent(new_session=True)
@@ -114,9 +122,12 @@ class Repl:
         system_prompt = build_system_prompt(
             workspace=self.workspace, memory=self.memory, skills=self.skills
         )
+        registry = build_core_registry()
+        for spec in self.mcp.tool_specs():
+            registry.register(spec)
         self.agent = Agent(
             transport=transport,
-            registry=build_core_registry(),
+            registry=registry,
             context=context,
             system_prompt=system_prompt,
             session_store=self.session_store,
@@ -128,12 +139,17 @@ class Repl:
 
     def status_line(self) -> str:
         preset = self.approvals.preset
-        badge = "  [!] permissive mode" if preset == "trusted-local" else ""
+        grants = [k for k, v in autonomy_from_config(self.config).items() if v]
+        badge = ""
+        if preset == "trusted-local" and grants:
+            badge = f"  [!] autonomy: {', '.join(g.replace('allow_', '') for g in grants)}"
         checkpoint_state = "on" if self.checkpoints else "off"
+        backend = self.config.get("terminal", {}).get("backend", "local")
         return (
             f"pulsar {__version__} | model {self.model_id} | preset {preset}{badge}\n"
             f"session {self.agent.context.session_id} | workspace {self.workspace}\n"
-            f"home {display_pulsar_home(self.home)} | checkpoints {checkpoint_state}"
+            f"home {display_pulsar_home(self.home)} | checkpoints {checkpoint_state} "
+            f"| backend {backend}"
         )
 
     def handle_slash(self, line: str) -> bool:
@@ -210,27 +226,36 @@ class Repl:
         return True
 
     def run_once(self, message: str) -> str:
-        return self.agent.run_turn(message)
+        try:
+            return self.agent.run_turn(message)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        self.mcp.close()
 
     def run(self) -> int:
         print(self.status_line())
         print("Type a request, /help for commands, /quit to exit.\n")
-        while True:
-            try:
-                line = input("pulsar> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return 0
-            if not line:
-                continue
-            if line.startswith("/"):
-                if not self.handle_slash(line):
+        try:
+            while True:
+                try:
+                    line = input("pulsar> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
                     return 0
-                continue
-            try:
-                reply = self.agent.run_turn(line)
-                print(f"\n{reply}\n")
-            except KeyboardInterrupt:
-                print("\n[turn interrupted]")
-            except Exception as exc:  # noqa: BLE001
-                print(f"\n[error] {self.redactor.redact(str(exc))}\n")
+                if not line:
+                    continue
+                if line.startswith("/"):
+                    if not self.handle_slash(line):
+                        return 0
+                    continue
+                try:
+                    reply = self.agent.run_turn(line)
+                    print(f"\n{reply}\n")
+                except KeyboardInterrupt:
+                    print("\n[turn interrupted]")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"\n[error] {self.redactor.redact(str(exc))}\n")
+        finally:
+            self.close()
