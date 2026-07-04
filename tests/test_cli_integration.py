@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def run_cli(args, home, workspace=None, stdin_text=None, extra_env=None):
-    env = {k: v for k, v in os.environ.items()}
+    env = dict(os.environ)
     env["PULSAR_HOME"] = str(home)
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("OPENAI_API_KEY", None)

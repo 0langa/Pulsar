@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from pulsar_agent import __version__
 from pulsar_agent.checkpoints.store import CheckpointStore
-from pulsar_agent.config import APPROVAL_PRESETS, save_config
+from pulsar_agent.config import save_config
 from pulsar_agent.home import display_pulsar_home
+from pulsar_agent.intel import (
+    build_project_map,
+    git_diff_stat,
+    git_summary,
+    render_project_map,
+)
 from pulsar_agent.mcp.manager import McpManager
 from pulsar_agent.memory.store import MemoryStore
 from pulsar_agent.prompt_builder import build_system_prompt
@@ -30,6 +38,7 @@ HELP_TEXT = """\
 Slash commands:
   /model [provider:model]  show or switch the active model
   /tools                   list enabled tools
+  /map                     show the project map and git status
   /memory [approve|discard] show memory; apply/discard staged writes
   /skills                  list discovered skills
   /checkpoint [label]      create a manual checkpoint
@@ -39,6 +48,35 @@ Slash commands:
   /help                    show this help
   /quit                    exit
 """
+
+# Recovery hints keyed by substring match against error text. Checked in
+# order; first hit wins. Keep phrases lowercase.
+RECOVERY_HINTS = (
+    (("api key", "unauthorized", "401", "authentication"),
+     "Provider auth problem. Run `pulsar setup` to store/refresh the key in PULSAR_HOME/.env."),
+    (("rate limit", "429", "overloaded", "529"),
+     "Provider is rate-limiting. Wait and retry, or configure `fallback_models` in config.yaml."),
+    (("connection", "timed out", "timeout", "unreachable", "getaddrinfo"),
+     "Network/provider unreachable. Check connectivity; for local models make sure the server (ollama/lmstudio) is running."),
+    (("docker",),
+     "Docker backend problem. Start Docker Desktop / the daemon, or switch back with `terminal.backend: local`."),
+    (("mcp server",),
+     "MCP server problem. Check the server's command/args in config.yaml `mcp.servers`; restart pulsar to reconnect."),
+    (("hardline", "blocked"),
+     "A safety boundary refused the action. This is not overridable; rephrase the task without the destructive step."),
+    (("requires approval", "denied"),
+     "Action needs approval. Re-run interactively, or grant the specific capability under `security.autonomy` (trusted-local only)."),
+    (("checkpoint", "rollback"),
+     "Checkpoint issue. Checkpoints need `git` on PATH; check `checkpoints.enabled` in config.yaml."),
+)
+
+
+def recovery_hint(error_text: str) -> str | None:
+    lowered = error_text.lower()
+    for needles, hint in RECOVERY_HINTS:
+        if any(needle in lowered for needle in needles):
+            return hint
+    return None
 
 
 def _console_approver(request: ApprovalRequest) -> bool:
@@ -61,10 +99,18 @@ class Repl:
         config: dict,
         workspace: Path,
         interactive: bool = True,
+        approver: Callable | None = None,
+        on_tool_event: Callable[[str, str], None] | None = None,
+        on_assistant_text: Callable[[str], None] | None = None,
     ):
         self.home = home
         self.config = config
         self.workspace = workspace.resolve()
+        self._on_tool_event = on_tool_event
+        self._on_assistant_text = on_assistant_text
+        self._turn_started = 0.0
+        self._tool_counter = 0
+        self._cancelled = False
         self.secrets = SecretStore(home)
         self.redactor = Redactor(
             known_values=self.secrets.all_values(),
@@ -77,14 +123,30 @@ class Repl:
             store = CheckpointStore(home, self.workspace)
             self.checkpoints = store if store.available() else None
         self.approvals = build_approval_manager(
-            config, _console_approver if interactive else None
+            config,
+            approver if approver is not None
+            else (_console_approver if interactive else None),
+        )
+        self.project_map_text = render_project_map(
+            build_project_map(self.workspace), git_summary(self.workspace)
         )
         self.skills = discover_skills(home)
-        self.mcp = McpManager(config, warn=lambda message: print(f"  [mcp] {message}"))
+        # MCP warnings can carry server stderr (env dumps, echoed secrets);
+        # redact before the console like every other output path.
+        self.mcp = McpManager(
+            config,
+            warn=lambda message: print(f"  [mcp] {self.redactor.redact(message)}"),
+        )
         self.mcp.start()
-        self.agent: Agent | None = None
+        self._agent: Agent | None = None
         self.model_id: str = config.get("model", "")
         self._build_agent(new_session=True)
+
+    @property
+    def agent(self) -> Agent:
+        if self._agent is None:
+            raise RuntimeError("agent not initialized")
+        return self._agent
 
     def _build_agent(self, new_session: bool) -> None:
         transport, fallbacks, runtime = build_agent_runtime(
@@ -96,8 +158,8 @@ class Repl:
             self.session_store.create_session(
                 workspace=str(self.workspace), model_id=self.model_id
             )
-            if new_session or self.agent is None
-            else self.agent.context.session_id
+            if new_session or self._agent is None
+            else self._agent.context.session_id
         )
         path_policy = PathPolicy(
             workspace=self.workspace,
@@ -115,17 +177,23 @@ class Repl:
             session_id=session_id,
             runtime_provider=runtime,
             transport=transport,
-            on_tool_event=lambda event, detail: print(
-                f"  · {event}: {self.redactor.redact(detail)}"
-            ),
+            on_tool_event=self._emit_tool_event,
         )
         system_prompt = build_system_prompt(
-            workspace=self.workspace, memory=self.memory, skills=self.skills
+            workspace=self.workspace,
+            memory=self.memory,
+            skills=self.skills,
+            project_map=self.project_map_text,
         )
         registry = build_core_registry()
         for spec in self.mcp.tool_specs():
-            registry.register(spec)
-        self.agent = Agent(
+            try:
+                registry.register(spec)
+            except ValueError:
+                # Two servers whose names sanitize to the same prefix would
+                # collide; skip the duplicate rather than abort startup.
+                print(f"  [mcp] skipping duplicate tool name {spec.name!r}")
+        self._agent = Agent(
             transport=transport,
             registry=registry,
             context=context,
@@ -134,8 +202,34 @@ class Repl:
             max_iterations=int(self.config.get("max_iterations", 40)),
             max_tokens=int(self.config.get("max_tokens", 8192)),
             fallback_transports=fallbacks,
-            on_assistant_text=lambda text: print(f"\n{text}\n"),
+            # Indirection so a caller (TUI) that swaps its sink after build
+            # still receives assistant text.
+            on_assistant_text=self._emit_assistant_text,
+            should_cancel=lambda: self._cancelled,
         )
+
+    def _emit_assistant_text(self, text: str) -> None:
+        if self._on_assistant_text is not None:
+            self._on_assistant_text(text)
+        else:
+            print(f"\n{text}\n")
+
+    def _emit_tool_event(self, event: str, detail: str) -> None:
+        """Progress line with per-turn tool counter and elapsed seconds so
+        long runs stay readable."""
+        detail = self.redactor.redact(detail)
+        if event == "tool":
+            self._tool_counter += 1
+        elapsed = time.monotonic() - self._turn_started if self._turn_started else 0.0
+        line = f"  · [{self._tool_counter:>2} {elapsed:5.1f}s] {event}: {detail}"
+        if self._on_tool_event is not None:
+            self._on_tool_event(event, line.strip())
+        else:
+            print(line)
+
+    def start_turn_clock(self) -> None:
+        self._turn_started = time.monotonic()
+        self._tool_counter = 0
 
     def status_line(self) -> str:
         preset = self.approvals.preset
@@ -152,6 +246,27 @@ class Repl:
             f"| backend {backend}"
         )
 
+    def switch_model(self, model_id: str) -> str:
+        """Switch the active model. Rebuilds the agent BEFORE persisting so a
+        bad id (bad format, missing key) never gets written to config.yaml and
+        brick the next startup. On failure the previous agent stays live."""
+        if not model_id:
+            return f"active model: {self.model_id}"
+        previous = self.model_id
+        try:
+            parse_model_id(model_id)
+            self.model_id = model_id
+            self._build_agent(new_session=False)
+        except Exception as exc:
+            self.model_id = previous
+            return f"cannot switch model: {exc}"
+        self.config["model"] = model_id
+        try:
+            save_config(self.home, self.config)
+        except Exception as exc:
+            return f"switched to {model_id} (not saved: {exc})"
+        return f"switched to {model_id}"
+
     def handle_slash(self, line: str) -> bool:
         """Handle a slash command. Returns False when the REPL should exit."""
         parts = line.strip().split(maxsplit=1)
@@ -163,21 +278,15 @@ class Repl:
         if command == "/help":
             print(HELP_TEXT)
         elif command == "/model":
-            if not arg:
-                print(f"active model: {self.model_id}")
-            else:
-                try:
-                    parse_model_id(arg)
-                    self.model_id = arg
-                    self.config["model"] = arg
-                    save_config(self.home, self.config)
-                    self._build_agent(new_session=False)
-                    print(f"switched to {arg}")
-                except Exception as exc:  # noqa: BLE001
-                    print(f"cannot switch model: {exc}")
+            print(self.switch_model(arg))
         elif command == "/tools":
             for spec in self.agent.registry.enabled(self.agent.context):
                 print(f"- {spec.name}: {spec.description.splitlines()[0][:90]}")
+        elif command == "/map":
+            print(self.project_map_text or "(no project map)")
+            diff = git_diff_stat(self.workspace)
+            if diff:
+                print("\nUncommitted diffstat:\n" + diff)
         elif command == "/memory":
             if arg == "approve":
                 print(self.memory.approve_staged())
@@ -213,7 +322,7 @@ class Repl:
                             "system",
                             f"rollback to checkpoint {target}",
                         )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     print(f"rollback failed: {exc}")
         elif command == "/reset":
             self.agent.reset()
@@ -227,6 +336,7 @@ class Repl:
 
     def run_once(self, message: str) -> str:
         try:
+            self.start_turn_clock()
             return self.agent.run_turn(message)
         finally:
             self.close()
@@ -247,15 +357,25 @@ class Repl:
                 if not line:
                     continue
                 if line.startswith("/"):
-                    if not self.handle_slash(line):
-                        return 0
+                    try:
+                        if not self.handle_slash(line):
+                            return 0
+                    except Exception as exc:
+                        print(f"[error] {self.redactor.redact(str(exc))}")
                     continue
                 try:
+                    self.start_turn_clock()
                     reply = self.agent.run_turn(line)
                     print(f"\n{reply}\n")
                 except KeyboardInterrupt:
+                    # run_turn already repaired history for the next turn.
                     print("\n[turn interrupted]")
-                except Exception as exc:  # noqa: BLE001
-                    print(f"\n[error] {self.redactor.redact(str(exc))}\n")
+                except Exception as exc:
+                    message = self.redactor.redact(str(exc))
+                    print(f"\n[error] {message}")
+                    hint = recovery_hint(message)
+                    if hint:
+                        print(f"[hint] {hint}")
+                    print()
         finally:
             self.close()

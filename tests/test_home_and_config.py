@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from pulsar_agent.config import (
-    ConfigError,
     DEFAULT_CONFIG,
+    ConfigError,
     deep_merge,
     load_config,
     save_config,

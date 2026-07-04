@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pulsar_agent.providers.base import CompletionResult, ProviderError, ToolCallRequest, Transport
+from pulsar_agent.providers.base import ProviderError, Transport
 from pulsar_agent.providers.mock_transport import MockTransport
 from pulsar_agent.providers.router import BUILTIN_PROFILES, RuntimeProvider
 from pulsar_agent.run_agent import Agent
@@ -137,6 +137,60 @@ def test_subagent_cannot_delegate(context):
     )
     report = run_subagent(context, role="explorer", goal="try to nest", budget=3)
     assert "gave up on nesting" in report
+
+
+def test_cooperative_cancel_stops_turn(context):
+    # Cancel is checked before the first iteration → no provider call runs.
+    agent = make_agent(context, script=[{"text": "should not appear"}])
+    agent.should_cancel = lambda: True
+    assert agent.run_turn("go") == "[turn cancelled]"
+    # History has only the user message; nothing dangling.
+    assert [m["role"] for m in agent.messages] == ["user"]
+
+
+def test_cancel_records_tool_results_for_pending_calls(context, workspace):
+    (workspace / "app.py").write_text("v = 1\n")
+    agent = make_agent(
+        context,
+        script=[
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "app.py"}}]},
+            {"text": "unreached"},
+        ],
+    )
+    # Cancel after the first assistant message is produced but before dispatch.
+    calls = {"n": 0}
+
+    def cancel():
+        calls["n"] += 1
+        return calls["n"] > 1  # allow first _cancelled() check, then cancel
+
+    agent.should_cancel = cancel
+    agent.run_turn("read it")
+    # Every assistant tool_call has a matching tool result → valid history.
+    tool_ids = {m["tool_call_id"] for m in agent.messages if m["role"] == "tool"}
+    for msg in agent.messages:
+        if msg["role"] == "assistant" and msg.get("tool_calls"):
+            for call in msg["tool_calls"]:
+                assert call["id"] in tool_ids
+
+
+def test_interrupted_turn_history_repaired(context):
+    class Boom(Transport):
+        def complete(self, system, messages, tools, max_tokens):
+            raise KeyboardInterrupt
+
+    agent = Agent(
+        transport=Boom(),
+        registry=build_core_registry(),
+        context=context,
+        system_prompt="s",
+    )
+    try:
+        agent.run_turn("hi")
+    except KeyboardInterrupt:
+        pass
+    # The bare trailing user message was dropped so the next turn is valid.
+    assert agent.messages == []
 
 
 def test_subagent_write_tools_unavailable(context, workspace):

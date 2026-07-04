@@ -9,6 +9,7 @@ enter the checkpoint store.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -43,7 +44,13 @@ def git_available() -> bool:
 class CheckpointStore:
     def __init__(self, home: Path, workspace: Path):
         self.workspace = workspace.resolve()
-        digest = hashlib.sha1(str(self.workspace).lower().encode()).hexdigest()[:12]
+        # normcase, not lower(): it folds case only on case-insensitive
+        # platforms (Windows), so distinct paths that differ only in case on
+        # Linux/macOS get distinct shadow repos instead of colliding onto one
+        # linear history (which would corrupt cross-workspace rollbacks).
+        digest = hashlib.sha1(
+            os.path.normcase(str(self.workspace)).encode(), usedforsecurity=False
+        ).hexdigest()[:12]
         self.git_dir = home / "checkpoints" / digest
         self._initialized = False
 
@@ -58,6 +65,7 @@ class CheckpointStore:
             "-c", "user.name=Pulsar",
             "-c", "user.email=pulsar@localhost",
             "-c", "core.autocrlf=false",
+            "-c", "core.quotepath=false",  # emit raw UTF-8 paths, not \NNN escapes
             *args,
         ]
         completed = subprocess.run(

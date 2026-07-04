@@ -1,42 +1,83 @@
 # Work Status
 
-Status: MVP + beta expansion Bars 1-4 implemented and verified. 238 passed, 1 skipped (docker integration; skips cleanly without a daemon).
-
-## Beta expansion pass
-
-- **Bar 1 (safety hardening)** — done in the previous session: allowlist-first subprocess env (`terminal.env_mode`), autonomy grants scoped to `trusted-local`, exact-match command allowlist, richer approval prompts, audit log. Tests in `tests/test_safety_hardening.py`.
-- **Bar 2 (Docker backend)** — done. `pulsar_agent/tools/docker_backend.py`; `terminal`/`execute_code` select backend via `terminal.backend` (`local`|`docker`). Hardened defaults (no privileged, cap-drop ALL, no-new-privileges, network none, workspace-only mount, mem/cpu/pids limits, env allowlist by name, timeout + kill, output limit). Graceful guidance when Docker is missing/daemon down. Approval semantics unchanged. Tests: `tests/test_docker_backend.py` (13 mocked + 1 best-effort integration that skips without a daemon).
-- **Bar 3 (MCP client)** — done. `pulsar_agent/mcp/` (stdio JSON-RPC client + manager). Disabled by default; per-server `enabled` flag, allowed_tools, env_passthrough (allowlist-first), startup_timeout. Tools namespaced `mcp_<server>_<tool>`, approval kind `mcp` (auto only via `security.autonomy.allow_mcp` under trusted-local), output truncated+redacted, crashed/absent servers excluded from schema, subagents excluded. Tests: `tests/test_mcp_client.py` (16, with a fake stdio server covering discovery, namespacing, env filtering, redaction, disabled-by-default, startup/call timeouts, crash handling, invocation).
-- **Bar 4 (web retrieval)** — done. `pulsar_agent/tools/web_tools.py`: `web_search` (DuckDuckGo no-key default, documented as best-effort; `brave` backend with user key via `web.search_results_api_env_var`) and `web_extract` (GET-only fetch, HTML→text, title/status/content-type/truncation metadata). SSRF policy blocks localhost/private/link-local/metadata/file:/redirect-into-private by default; `web.allow_private_urls` opt-in. Gated by `web.enabled` + hidden from subagents; `paranoid` prompts per fetch. Tests: `tests/test_web_tools.py` (32).
+Status: MVP + full beta expansion (Bars 1-8) implemented, self-audited, and verified.
 
 Public repository: https://github.com/0langa/Pulsar (`origin`, branch `main`).
 
-## Implemented
+## Bar status (beta expansion)
 
-- Package `pulsar_agent`, distribution `pulsar-agent`, CLI `pulsar` + `python -m pulsar_agent` (pyproject.toml, entry point).
-- `PULSAR_HOME` state root (`home.py`): env override, `~/.pulsar` default, `get_pulsar_home()` / `display_pulsar_home()`, layout bootstrap.
-- Config (`config.py`): YAML behavior config with deep-merge defaults; custom providers validated; inline `api_key` in config rejected.
-- Secrets (`secrets.py`): `.env`-only secret store, never exported to `os.environ`, restricted file permissions, redactor registration.
-- Security (`security/`): centralized redaction (values + patterns), workspace path policy with credential-file blocklist and protected `PULSAR_HOME`, three-tier command risk classifier with non-overridable hardline blocklist, approval presets `paranoid`/`review`/`trusted-local` with audit log.
-- Providers (`providers/`): `provider:model` router; `anthropic_messages`, `chat_completions`, `custom_openai_compatible` transports; local Ollama/LM Studio presets; deterministic `mock` transport; fallback chain on retryable errors.
-- Tools (`tools/`): registry with `check_fn` gating; core set capped at eight: `read_file`, `write_file`, `patch`, `search_files`, `terminal`, `execute_code`, `todo`, `delegate_task`. Read-before-edit enforced; terminal/execute run with scrubbed env; every result redacted + truncated.
-- Sessions (`sessions/store.py`): SQLite WAL + FTS5, redact-before-persist, create/append/list/search/delete.
-- Memory (`memory/store.py`): bounded `MEMORY.md`/`USER.md`, frozen snapshot, secret + injection scans, staged writes with `/memory approve`.
-- Skills (`skills/`): builtin + `PULSAR_HOME/skills` discovery, frontmatter parsing, one builtin skill (`python-test-and-fix`).
-- Checkpoints (`checkpoints/store.py`): shadow-git store per workspace under `PULSAR_HOME/checkpoints/`, secrets excluded, linear-history rollback that is itself reversible.
-- Agent loop (`run_agent.py`): sync ReAct loop, iteration budget with graceful exhaustion, stable per-session tool schema, subagent runner with role-restricted registries.
-- CLI (`cli/`): REPL with status header and tool progress, slash commands (`/model /tools /memory /skills /checkpoint /rollback /reset /new /help /quit`), `pulsar setup`, `pulsar model`, `pulsar sessions list|search|delete`, `--once` non-interactive turn.
-- Docs: `README.md`, `SECURITY.md`, `LICENSE` (MIT).
+| Bar | Scope | Status | Evidence |
+|---|---|---|---|
+| 1 | Safety hardening (allowlist-first env, autonomy grants, command allowlist, audit log) | PASS | `tests/test_safety_hardening.py` |
+| 2 | Docker execution backend (opt-in, hardened defaults, graceful degradation) | PASS | `tests/test_docker_backend.py` (14, incl. live daemon integration) |
+| 3 | stdio MCP client (disabled by default, namespaced tools, allowlist env, approval-gated) | PASS | `tests/test_mcp_client.py` (16, fake stdio server) |
+| 4 | Read-only web retrieval (SSRF policy, GET-only, DDG + Brave backends) | PASS | `tests/test_web_tools.py` (32) |
+| 5 | TUI (`pulsar --tui`, textual extra, graceful fallback, modal approvals) | PASS | `tests/test_tui.py` (parser, controller, headless pilot) |
+| 6 | Repo intelligence (project map, test discovery, git awareness, progress + recovery UX) | PASS | `tests/test_intel.py`, recovery-hint tests in `tests/test_tui.py` |
+| 7 | Production hygiene (ruff, mypy, bandit, pip-audit, GitHub Actions CI, coverage) | PASS | `.github/workflows/ci.yml`, `pyproject.toml` tool sections |
+| 8 | End-to-end verification + audit greps | PASS | commands below |
 
-## Test Status
+## Exact commands run (Bar 8 verification)
 
-Command: `python -m pytest` → 238 passed, 1 skipped (docker daemon integration check). Unit + integration; integration covers `--help`, setup with fake key, mocked-provider session, patch+rollback in temp repo, terminal-output redaction into session DB, session search snippets, and (when a daemon is present) a real docker echo run.
+```
+python -m pytest                          → 294 passed (incl. docker integration; skips cleanly without daemon)
+python -m pytest --cov=pulsar_agent --cov-report=term-missing   (coverage command)
+ruff check pulsar_agent tests             → All checks passed!
+mypy                                      → Success: no issues found in 44 source files
+bandit -c pyproject.toml -r pulsar_agent  → 0 issues (justified skips documented in pyproject)
+pip-audit --skip-editable                 → no findings for Pulsar deps (pyyaml, httpx, textual);
+                                            unrelated hermes-venv packages excluded from scope, CI runs in a clean env
+python -m pulsar_agent --help             → OK
+pulsar --help                             → OK (console script installed)
+PULSAR_HOME=<tmp> python -m pulsar_agent --once "verify beta pass"   (mock provider) → OK
+python -m pulsar_agent sessions search "verify beta"                 → snippet found
+```
 
-Audit greps from `docs/VERIFICATION_PLAN.md` run clean: no TODO/FIXME in implementation, no stale research paths or prohibited terms in shipped code/docs (remaining `api_key:` hits are Python type annotations, not config secrets). Handoff artifacts with machine-specific paths (`START_HERE.md`, `docs/HANDOFF_AUDIT.md`) are git-ignored along with `research/`.
+Audit greps: no `fable5`/`hermes` names in shipped code/docs, no `research/` files tracked by git, no TODO/FIXME in implementation, no inline secrets in config.
+
+## Self-audit (release gate)
+
+Two independent audit agents reviewed Bars 1-8 (security/backends; CLI/TUI/persistence). Every P0/P1 and the load-bearing P2/P3 findings were fixed in the same pass, each with a regression test. Remaining P3s are accepted and documented in `PROJECT_STATE.md`.
+
+Fixes applied (with the test that guards each):
+
+- **P1 — SAFE-classification command-injection bypass.** `command_risk.classify_command` treated `cat $(rm -rf ~)`, backticks, `;`/`&&` chains, and embedded newlines as SAFE (auto-approved under `review`). Added a shell-metacharacter gate that forfeits SAFE before the allow patterns. Test: `test_shell_escape_never_safe`.
+- **P1 — TUI worker kept running after quit.** Thread worker had no cancel path; actions executed post-exit and shutdown blocked on it. Added cooperative cancel (`Agent.should_cancel`, checked each iteration; pending calls still get recorded results) and `on_unmount` releases pending approvals + sets cancel. Tests: `test_cooperative_cancel_stops_turn`, `test_cancel_records_tool_results_for_pending_calls`.
+- **P2 — MCP startup warnings/stderr reached console unredacted.** Routed the MCP warn callback through the redactor.
+- **P2 — `/model` persisted a bad id before validating**, bricking next startup. `switch_model` now rebuilds before persisting and rolls back on failure. Test: `test_switch_model_does_not_persist_bad_id`.
+- **P2 — Interrupted turn left a dangling `tool_use`** → every later turn 400s. `run_turn` repairs history on any interruption. Test: `test_interrupted_turn_history_repaired`.
+- **P2 — Checkpoint shadow repos collided on case-sensitive FS** (`str.lower()` digest). Switched to `os.path.normcase`. Test: `test_case_distinct_workspaces_get_distinct_shadow_repos`.
+- **P2 — `intel.build_project_map` hung on a symlink cycle** at startup. Added a visited-realpath set and symlink skip. Test: `test_project_map_survives_symlink_cycle`.
+- **P2 — `run_tui` built `Repl` outside its try** → raw traceback on startup error. Moved inside the guard.
+- **P2 — TUI assistant text sink captured pre-mount** → intermediate output lost. Agent now reads the sink indirectly at emit time.
+- **P2 — Unhandled slash-command exception killed the REPL.** Wrapped `handle_slash` per-command.
+- **P2 — Staged memory writes clobbered each other** (each composed from disk). `_compose` now builds on the latest pending staged content. Tests: `test_multiple_staged_writes_are_cumulative`, `test_staged_duplicate_detected_against_pending`.
+- **P3 — SSRF missed CGNAT (100.64.0.0/10).** `_ip_blocked` now also rejects `not is_global`. Tests: CGNAT cases in `test_private_and_metadata_urls_blocked`, `test_cgnat_hostname_blocked`.
+- **P3 — MCP unbounded read buffer** (giant no-newline line). Bounded `readline`; oversized frames dropped. Test: `test_oversized_frame_dropped_not_buffered`.
+- **P3 — MCP sanitized-name collision aborted startup.** Duplicate namespaced tools are now skipped with a warning.
+- **P3 — `/memory` unusable in the TUI** (staged writes were a dead end). Added `/memory` to the TUI. Test: `test_memory_command_available_in_tui`.
+- **P3 — Checkpoint rollback missed non-ASCII added files** (git quotepath). Set `core.quotepath=false`.
+- **P3 — `SecretStore.set` corrupted `.env` on a multiline value.** Rejects newlines. Test: `test_secret_store_rejects_newline_value`.
+- **Earlier in-pass fixes:** SessionStore thread-safety (locked, `check_same_thread=False`); project-map prompt-injection framing; typed `build_agent_runtime`; bandit findings (SHA-1 `usedforsecurity=False`, asserts → guards, annotated best-effort paths).
+
+Accepted/deferred P3s (rationale + next step in `PROJECT_STATE.md`): docker network/image validation, `pulsar model` subcommand resolvability, TUI approval-modal stale-timeout cosmetic, sub-6-char secret redaction, mid-tool (vs between-iteration) cancellation.
+
+## Final verification commands (Bar 8 + self-audit)
+
+```
+python -m pytest                          → 294 passed
+ruff check pulsar_agent tests             → All checks passed!
+mypy                                      → Success: no issues found in 44 source files
+bandit -c pyproject.toml -r pulsar_agent  → 0 issues
+pip-audit --skip-editable                 → no findings for Pulsar deps
+python -m pulsar_agent --help / pulsar --help → OK
+pulsar --once (mock) + sessions search    → OK
+docker integration test                   → passed (daemon present)
+```
 
 ## Deferred (per scope lock)
 
-Remaining should-have: full-screen TUI. All V1+ items (gateways, cron, dashboards, browser automation, marketplace, cloud terminals) remain out of scope. Future-improvement ideas are tracked in `PROJECT_STATE.md`.
+All V1+ items (gateways, cron, dashboards, browser automation, marketplace, cloud terminals) remain out of scope. Future-improvement ideas: see `PROJECT_STATE.md`.
 
 ## Open Questions
 

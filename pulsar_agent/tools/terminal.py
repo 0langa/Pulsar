@@ -143,7 +143,7 @@ def terminal_handler(args: dict, context: ToolContext) -> str:
     if will_checkpoint:
         try:
             context.checkpoints.snapshot(f"before terminal: {command[:60]}")  # type: ignore[attr-defined]
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             context.emit("warn", f"checkpoint failed: {exc}")
     context.emit("terminal", f"[{backend}] {command}")
 

@@ -29,3 +29,9 @@ build/
 *.log
 logs/
 
+uv.lock
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/

@@ -78,6 +78,14 @@ MCP servers are third-party code running on your machine. Enabling one is equiva
 
 Web-specific limits: a fetched URL is also an outbound channel — a prompt-injected page could ask the model to encode data into a subsequent request's query string. Redaction masks known secrets in tool *output*, not in requested URLs; `paranoid` puts a human in front of every request. The SSRF check resolves DNS separately from the request, so a DNS-rebinding server could theoretically pass validation; treat `allow_private_urls` and rebinding as residual risks and keep the default policy on for untrusted content.
 
+## TUI
+
+The optional TUI changes presentation only, never the permission model: approval requests from the agent worker thread block until the user decides in a modal (default deny on timeout/escape), the same redaction runs before anything reaches the transcript, and the session store is thread-safe (single connection behind a lock). If Textual is missing or the terminal is insufficient, Pulsar degrades to guidance and the classic CLI remains fully functional.
+
+## Static analysis and CI
+
+`ruff`, `mypy`, `bandit`, and `pip-audit` run in CI on every push/PR alongside the test suite (Linux + Windows). Bandit's subprocess findings are deliberately skipped with rationale in `pyproject.toml`: subprocess/shell execution *is* the terminal tool, and every invocation is risk-classified, approval-gated, and environment-scrubbed as described above.
+
 ## Known limits
 
 - The local terminal backend offers no OS-level sandboxing; the risk classifier and approvals are the primary defense. Review commands before approving them.

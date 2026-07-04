@@ -59,6 +59,13 @@ _SENSITIVE_REFERENCE = re.compile(
     r"(?i)(\.env\b|auth\.json|secrets\.enc|id_rsa|id_ed25519|\.git[/\\]credentials|\.pem\b|\.ssh\b)"
 )
 
+# Shell features that can smuggle a second command into an otherwise
+# read-only line: command/process substitution, redirection, chaining,
+# and line breaks. Any hit forfeits SAFE — the command still runs, but
+# only through the approval pipeline. (Commands execute with shell=True,
+# so `cat $(...)`, backticks, and embedded newlines are all live syntax.)
+_SHELL_ESCAPE_FEATURES = re.compile(r"[\n\r`|;&<>]|\$\(|\$\{")
+
 
 def classify_command(command: str) -> tuple[RiskTier, str]:
     """Classify a shell command. Hardline matches always win."""
@@ -70,6 +77,8 @@ def classify_command(command: str) -> tuple[RiskTier, str]:
             return RiskTier.BLOCKED, reason
     if _SENSITIVE_REFERENCE.search(stripped):
         return RiskTier.APPROVAL, "references sensitive credential paths"
+    if _SHELL_ESCAPE_FEATURES.search(stripped):
+        return RiskTier.APPROVAL, "shell substitution/chaining requires approval"
     for pattern in _SAFE_PATTERNS:
         if pattern.match(stripped):
             return RiskTier.SAFE, "read-only or non-mutating test command"

@@ -29,6 +29,10 @@ CLIENT_INFO = {"name": "pulsar", "version": "0.2"}
 DEFAULT_STARTUP_TIMEOUT = 20
 DEFAULT_CALL_TIMEOUT = 60
 MAX_STDERR_CHARS = 4000
+READ_CHUNK_SIZE = 65536
+# A single JSON-RPC frame larger than this from a server is treated as hostile
+# / malformed and dropped rather than buffered without bound.
+MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
 class McpError(RuntimeError):
@@ -47,7 +51,7 @@ class McpServerSpec:
     startup_timeout: int = DEFAULT_STARTUP_TIMEOUT
 
     @classmethod
-    def from_config(cls, entry: dict) -> "McpServerSpec":
+    def from_config(cls, entry: dict) -> McpServerSpec:
         allowed = entry.get("allowed_tools")
         return cls(
             name=str(entry["name"]),
@@ -165,22 +169,44 @@ class McpClient:
 
     def _read_stdout(self) -> None:
         process = self._process
-        assert process is not None and process.stdout is not None
-        for line in process.stdout:
-            line = line.strip()
-            if not line:
+        if process is None or process.stdout is None:
+            return
+        stream = process.stdout
+        # Bounded readline: readline(limit) stops at a newline OR `limit`
+        # characters, so a hostile server sending a huge line with no newline
+        # cannot make us buffer without bound. A frame that hits the cap with
+        # no trailing newline is discarded (and we skip to the next boundary).
+        skipping = False
+        while True:
+            chunk = stream.readline(MAX_MESSAGE_BYTES)
+            if not chunk:
+                break
+            complete = chunk.endswith("\n")
+            if skipping:
+                # Mid-oversized-frame: swallow until we see a newline.
+                skipping = not complete
                 continue
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # non-protocol noise on stdout
-            if isinstance(message, dict):
-                self._messages.put(message)
+            if not complete and len(chunk) >= MAX_MESSAGE_BYTES:
+                skipping = True  # frame exceeded the cap; drop it
+                continue
+            self._dispatch_line(chunk)
         self._messages.put({"__eof__": True})
+
+    def _dispatch_line(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            return  # non-protocol noise on stdout
+        if isinstance(message, dict):
+            self._messages.put(message)
 
     def _read_stderr(self) -> None:
         process = self._process
-        assert process is not None and process.stderr is not None
+        if process is None or process.stderr is None:
+            return
         for line in process.stderr:
             self._stderr_tail = (self._stderr_tail + line)[-MAX_STDERR_CHARS:]
 

@@ -73,7 +73,7 @@ def build_docker_command(
         "-w", CONTAINER_WORKDIR,
     ]
     if cfg.get("read_only_rootfs", False):
-        args += ["--read-only", "--tmpfs", "/tmp"]
+        args += ["--read-only", "--tmpfs", "/tmp"]  # nosec B108 - container path
     if interactive:
         args.append("-i")
     # `-e NAME` (no value) forwards from the docker CLI environment, keeping

@@ -7,9 +7,9 @@ __all__ = [
     "ApprovalDenied",
     "ApprovalManager",
     "HardlineBlocked",
-    "RiskTier",
-    "classify_command",
     "PathPolicy",
     "PathSecurityError",
     "Redactor",
+    "RiskTier",
+    "classify_command",
 ]

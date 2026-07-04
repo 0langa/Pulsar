@@ -11,7 +11,7 @@ therefore length-capped and prefixed with their origin.
 from __future__ import annotations
 
 import re
-from typing import Callable
+from collections.abc import Callable
 
 from pulsar_agent.mcp.client import (
     DEFAULT_CALL_TIMEOUT,

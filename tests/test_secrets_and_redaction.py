@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pulsar_agent.secrets import SecretStore, parse_env_text
 from pulsar_agent.security.redaction import MASK, Redactor
 
@@ -35,6 +37,18 @@ def test_secret_store_set_writes_file(home):
     text = (home / ".env").read_text(encoding="utf-8")
     assert text.count("NEW_KEY=") == 1
     assert "value-def-456" in text
+
+
+def test_secret_store_rejects_newline_value(home):
+    # A newline would corrupt the line-based .env parser and silently drop
+    # later keys; reject rather than write garbage.
+    store = SecretStore(home)
+    store.set("GOOD", "fine-value-123")
+    with pytest.raises(ValueError, match="newline"):
+        store.set("BAD", "line1\nSNEAKY=injected")
+    reloaded = SecretStore(home)
+    assert reloaded.get("GOOD") == "fine-value-123"
+    assert reloaded.get("SNEAKY") is None
 
 
 def test_redactor_masks_known_values():

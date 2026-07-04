@@ -65,6 +65,27 @@ def test_memory_staged_writes(home, config):
     assert "staged fact" in memory.snapshot()
 
 
+def test_multiple_staged_writes_are_cumulative(home, config):
+    # Regression: two staged adds in one turn must both survive approval
+    # (each composes on the previous staged content, not just the file).
+    config["memory"]["write_approval"] = True
+    memory = MemoryStore(home, config, Redactor())
+    memory.apply("MEMORY.md", "add", "first fact")
+    memory.apply("MEMORY.md", "add", "second fact")
+    memory.approve_staged()
+    snapshot = memory.snapshot()
+    assert "first fact" in snapshot
+    assert "second fact" in snapshot
+
+
+def test_staged_duplicate_detected_against_pending(home, config):
+    config["memory"]["write_approval"] = True
+    memory = MemoryStore(home, config, Redactor())
+    memory.apply("MEMORY.md", "add", "only once")
+    with pytest.raises(MemoryWriteRejected):
+        memory.apply("MEMORY.md", "add", "only once")
+
+
 def test_memory_replace_and_remove(memory):
     memory.apply("MEMORY.md", "add", "old fact")
     memory.apply("MEMORY.md", "replace", "new fact", old="old fact")

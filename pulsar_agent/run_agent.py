@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from pulsar_agent.providers.base import CompletionResult, ProviderError, Transport
-from pulsar_agent.providers.router import create_transport, resolve_runtime_provider
+from pulsar_agent.providers.router import (
+    RuntimeProvider,
+    create_transport,
+    resolve_runtime_provider,
+)
 from pulsar_agent.secrets import SecretStore
 from pulsar_agent.sessions.store import SessionStore
 from pulsar_agent.tools.registry import ToolContext, ToolRegistry
@@ -25,8 +29,40 @@ class Agent:
     max_tokens: int = 8192
     fallback_transports: list[Transport] = field(default_factory=list)
     on_assistant_text: Callable[[str], None] | None = None
+    # Cooperative cancel: checked before each iteration so a running turn stops
+    # making provider calls / tool actions once the TUI user quits.
+    should_cancel: Callable[[], bool] | None = None
     messages: list[dict] = field(default_factory=list)
     _tool_schemas: list[dict] | None = None
+
+    def _cancelled(self) -> bool:
+        return self.should_cancel is not None and self.should_cancel()
+
+    def _emit_assistant(self, text: str) -> None:
+        # Read the sink indirectly at call time so a caller (e.g. the TUI)
+        # that swaps its sink after the Agent is built still receives output.
+        if self.on_assistant_text:
+            self.on_assistant_text(text)
+
+    def _repair_incomplete_turn(self) -> None:
+        """Keep message history provider-valid after an interruption. A trailing
+        assistant message with tool_calls but missing tool results, or a
+        trailing bare user message, would 400 on the next turn — drop it."""
+        while self.messages:
+            last = self.messages[-1]
+            if last.get("role") == "assistant" and last.get("tool_calls"):
+                answered = {
+                    m.get("tool_call_id")
+                    for m in self.messages
+                    if m.get("role") == "tool"
+                }
+                if not all(c["id"] in answered for c in last["tool_calls"]):
+                    self.messages.pop()
+                    continue
+            if last.get("role") in ("user", "tool"):
+                self.messages.pop()
+                continue
+            break
 
     def _schemas(self) -> list[dict]:
         # Resolved once per session so the model toolset stays stable.
@@ -58,8 +94,18 @@ class Agent:
     def run_turn(self, user_text: str) -> str:
         self.messages.append({"role": "user", "content": user_text})
         self._persist("user", user_text)
+        try:
+            return self._run_loop()
+        except BaseException:
+            # KeyboardInterrupt, provider error, or cancel mid-turn: repair the
+            # history so the next turn is not rejected for a dangling tool_use.
+            self._repair_incomplete_turn()
+            raise
 
+    def _run_loop(self) -> str:
         for _ in range(self.max_iterations):
+            if self._cancelled():
+                return "[turn cancelled]"
             result = self._complete()
             assistant_msg: dict = {
                 "role": "assistant",
@@ -73,15 +119,22 @@ class Agent:
             if result.text:
                 safe_text = self.context.redactor.redact(result.text)
                 self._persist("assistant", safe_text)
-                if result.tool_calls and self.on_assistant_text:
-                    self.on_assistant_text(safe_text)
+                if result.tool_calls:
+                    self._emit_assistant(safe_text)
 
             if not result.tool_calls:
                 return self.context.redactor.redact(result.text or "")
 
             for call in assistant_msg["tool_calls"]:
                 self.context.emit("tool", f"{call['name']}({_summarize(call['arguments'])})")
-                output = self.registry.dispatch(call["name"], call["arguments"], self.context)
+                if self._cancelled():
+                    # Still record a result for every pending call so history
+                    # stays valid, then stop the turn.
+                    output = "ERROR: turn cancelled by user"
+                else:
+                    output = self.registry.dispatch(
+                        call["name"], call["arguments"], self.context
+                    )
                 self.messages.append(
                     {
                         "role": "tool",
@@ -91,6 +144,8 @@ class Agent:
                     }
                 )
                 self._persist("tool", output, tool_name=call["name"])
+            if self._cancelled():
+                return "[turn cancelled]"
 
         final = (
             "Iteration budget exhausted before the task finished. "
@@ -160,7 +215,7 @@ def run_subagent(parent_context: ToolContext, role: str, goal: str, budget: int)
     )
     try:
         summary = agent.run_turn(f"Goal: {goal}")
-    except Exception as exc:  # noqa: BLE001 - subagent failure returns to parent
+    except Exception as exc:
         return f"ERROR: subagent {role} failed: {type(exc).__name__}: {exc}"
     return f"[{role} subagent report]\n{summary}"
 
@@ -169,7 +224,7 @@ def build_agent_runtime(
     model_id: str,
     config: dict,
     secrets: SecretStore,
-) -> tuple[Transport, list[Transport], object]:
+) -> tuple[Transport, list[Transport], RuntimeProvider]:
     """Resolve the primary and fallback transports for a model id."""
     runtime = resolve_runtime_provider(model_id, config, secrets)
     primary = create_transport(runtime)
@@ -178,6 +233,6 @@ def build_agent_runtime(
         try:
             fallback_runtime = resolve_runtime_provider(fallback_id, config, secrets)
             fallbacks.append(create_transport(fallback_runtime))
-        except Exception:  # noqa: BLE001 - unusable fallback entries are skipped
+        except Exception:  # nosec B112 - unusable fallback entries are skipped
             continue
     return primary, fallbacks, runtime

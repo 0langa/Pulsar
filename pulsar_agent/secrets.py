@@ -56,6 +56,10 @@ class SecretStore:
         return [v for v in self._values.values() if v]
 
     def set(self, name: str, value: str) -> None:
+        if "\n" in value or "\r" in value:
+            # A newline in the value would corrupt the line-based .env parser
+            # (later keys silently vanish). Reject rather than write garbage.
+            raise ValueError("secret value must not contain newlines")
         self._values[name] = value
         lines: list[str] = []
         replaced = False

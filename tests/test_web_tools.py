@@ -77,11 +77,19 @@ def fake_public_dns(monkeypatch, hosts_to_ips: dict[str, str]):
         "http://[::1]/",
         "http://metadata.google.internal/computeMetadata/v1/",
         "http://0.0.0.0/",
+        "http://100.64.0.1/",  # carrier-grade NAT (100.64.0.0/10)
+        "http://100.127.255.254/",
     ],
 )
 def test_private_and_metadata_urls_blocked(url, config):
     with pytest.raises(UrlBlocked):
         check_url(url, config)
+
+
+def test_cgnat_hostname_blocked(config, monkeypatch):
+    fake_public_dns(monkeypatch, {"fabric.internal": "100.64.12.9"})
+    with pytest.raises(UrlBlocked):
+        check_url("https://fabric.internal/", config)
 
 
 @pytest.mark.parametrize(

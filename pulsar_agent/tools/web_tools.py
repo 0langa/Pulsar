@@ -61,8 +61,14 @@ def _web_cfg(config: dict) -> dict:
 
 
 def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    # `is_global` is False for every non-internet-routable range — private,
+    # loopback, link-local, reserved, multicast, unspecified, AND carrier-grade
+    # NAT (100.64.0.0/10) which the individual flags miss. Explicit flags are
+    # kept as belt-and-suspenders in case a range's is_global classification
+    # ever differs across Python versions.
     return (
-        ip.is_loopback
+        not ip.is_global
+        or ip.is_loopback
         or ip.is_private
         or ip.is_link_local
         or ip.is_reserved
@@ -234,7 +240,7 @@ def html_to_text(html: str) -> tuple[str, str]:
     try:
         parser.feed(html)
         parser.close()
-    except Exception:  # noqa: BLE001 - malformed HTML falls back to raw parts
+    except Exception:
         pass
     return " ".join(parser.title.split()), parser.text()
 
@@ -296,7 +302,7 @@ def _parse_duckduckgo(html: str) -> list[dict]:
     try:
         parser.feed(html)
         parser.close()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     seen: set[str] = set()
     out = []

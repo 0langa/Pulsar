@@ -45,6 +45,11 @@ TOOLS = [
         "description": "Always fails.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "flood",
+        "description": "Emit a giant no-newline line before the real result.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 for line in sys.stdin:
@@ -75,6 +80,15 @@ for line in sys.stdin:
         if name == "boom":
             send({"jsonrpc": "2.0", "id": mid, "result": {
                 "content": [{"type": "text", "text": "it broke"}], "isError": True,
+            }})
+            continue
+        if name == "flood":
+            # 20 MB oversized frame (its own line): must be dropped for
+            # exceeding MAX_MESSAGE_BYTES, then the real reply still parses.
+            sys.stdout.write("x" * (20 * 1024 * 1024) + "\n")
+            sys.stdout.flush()
+            send({"jsonrpc": "2.0", "id": mid, "result": {
+                "content": [{"type": "text", "text": "survived flood"}], "isError": False,
             }})
             continue
         if name == "echo":
@@ -312,6 +326,25 @@ def test_call_timeout(server_script):
     try:
         with pytest.raises(McpError, match="no response"):
             client.call_tool("echo", {"text": "x"}, timeout=2)
+    finally:
+        client.close()
+
+
+def test_oversized_frame_dropped_not_buffered(server_script):
+    # A 20 MB no-newline frame must be discarded (bounded read), and the real
+    # reply on the next line must still be parsed.
+    spec = McpServerSpec(
+        name="fake",
+        command=sys.executable,
+        args=[str(server_script), "normal"],
+        enabled=True,
+        startup_timeout=15,
+    )
+    client = McpClient(spec)
+    client.start()
+    try:
+        out = client.call_tool("flood", {}, timeout=30)
+        assert "survived flood" in out
     finally:
         client.close()
 

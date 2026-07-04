@@ -38,6 +38,23 @@ def test_shadow_repo_outside_project_git(home, workspace):
     assert store.git_dir.is_relative_to(home / "checkpoints")
 
 
+def test_case_distinct_workspaces_get_distinct_shadow_repos(home, tmp_path):
+    # Regression: on case-sensitive filesystems two workspaces differing only
+    # in case must not share one shadow history (cross-workspace corruption).
+    import os
+
+    lower = tmp_path / "proj"
+    upper = tmp_path / "Proj"
+    lower.mkdir()
+    a = CheckpointStore(home, lower)
+    b = CheckpointStore(home, upper)
+    if os.path.normcase("A") == os.path.normcase("a"):
+        # Case-insensitive platform (Windows): same dir → same repo by design.
+        assert a.git_dir == b.git_dir
+    else:
+        assert a.git_dir != b.git_dir
+
+
 @requires_git
 def test_env_files_excluded_from_checkpoints(home, workspace):
     (workspace / ".env").write_text("SECRET_KEY=topsecret123")

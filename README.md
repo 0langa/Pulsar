@@ -10,7 +10,9 @@ Requires Python 3.11+.
 
 ```bash
 pip install -e .
-# or with dev tools:
+# with the optional full-screen TUI:
+pip install -e ".[tui]"
+# or with dev tools (tests, lint, type check, security scans):
 pip install -e ".[dev]"
 ```
 
@@ -29,6 +31,19 @@ Non-interactive single turn:
 ```bash
 pulsar --once "explain the failing test in tests/test_auth.py"
 ```
+
+## TUI (optional)
+
+```bash
+pip install "pulsar-agent[tui]"
+pulsar --tui
+```
+
+Full-screen terminal UI on [Textual](https://textual.textualize.io/): status bar (model, session, approval preset, checkpoints, backend), scrolling transcript with live tool activity, input composer, and modal approval prompts. `/help`, `/model`, `/reset`, `/quit` work inside it. The classic CLI stays the default; without the `tui` extra (or on terminals Textual cannot drive) `pulsar --tui` exits with installation guidance instead of a traceback.
+
+## Project awareness
+
+At session start Pulsar builds a heuristic project map — languages, tooling, package managers, key files, likely test commands, git branch/changed files/recent commits — and gives it to the model as context. `/map` shows the same map plus an uncommitted diffstat. Tool progress lines carry a per-turn counter and elapsed time, and common failures (auth, rate limit, Docker down, MCP misconfig, denied approvals) come with a recovery hint.
 
 ## Providers
 
@@ -149,7 +164,7 @@ Subprocess environment handling is allowlist-first by default (`terminal.env_mod
 
 ## Slash commands
 
-`/model`, `/tools`, `/memory`, `/skills`, `/checkpoint`, `/rollback`, `/reset`, `/new`, `/help`, `/quit`
+`/model`, `/tools`, `/map`, `/memory`, `/skills`, `/checkpoint`, `/rollback`, `/reset`, `/new`, `/help`, `/quit`
 
 ## Security
 
@@ -159,8 +174,15 @@ Secrets live only in `PULSAR_HOME/.env`. Redaction runs before console output, l
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest
+python -m pytest                                   # test suite
+python -m pytest --cov=pulsar_agent --cov-report=term-missing  # with coverage
+ruff check pulsar_agent tests                      # lint
+mypy                                               # type check
+bandit -c pyproject.toml -r pulsar_agent           # security scan
+pip-audit --skip-editable                          # dependency vulnerabilities
 ```
+
+CI (GitHub Actions) runs tests on Linux + Windows (Python 3.11/3.12), lint, type check, and both security scans on every push and PR.
 
 ## License
 

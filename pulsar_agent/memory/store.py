@@ -83,8 +83,18 @@ class MemoryStore:
         if self.redactor.redact(content) != content:
             raise MemoryWriteRejected("memory write rejected: contains secret-like content")
 
+    def _current(self, target: str) -> str:
+        """Base content to compose onto: the most recent staged write for this
+        target if one is pending, otherwise the on-disk file. Without this,
+        multiple staged writes in one turn each build on the file and the last
+        approve clobbers the earlier ones."""
+        for staged in reversed(self.staged):
+            if staged.target == target:
+                return staged.new_content
+        return self.read(target)
+
     def _compose(self, target: str, action: str, content: str, old: str) -> str:
-        current = self.read(target)
+        current = self._current(target)
         if action == "add":
             entry = content.strip()
             if entry and entry in current:

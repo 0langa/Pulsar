@@ -37,7 +37,7 @@ def _checkpoint(context: ToolContext, label: str) -> None:
     if store is not None:
         try:
             store.snapshot(label)  # type: ignore[attr-defined]
-        except Exception as exc:  # noqa: BLE001 - checkpoint failure must not corrupt writes
+        except Exception as exc:
             context.emit("warn", f"checkpoint failed: {exc}")
 
 

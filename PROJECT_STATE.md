@@ -10,7 +10,7 @@ A local-first, single-user coding agent. Terminal-native. Reads/edits files, sea
 
 - Public repo: https://github.com/0langa/Pulsar (`origin`, branch `main`).
 - MVP shipped (commits `68f71cf`, `ffc862f`).
-- Beta expansion Bars 1-4 done (safety hardening, Docker backend, MCP client, web retrieval). Remaining candidates: TUI, repo intelligence, production hygiene. Tracked bar-by-bar in `WORK_STATUS.md`.
+- Beta expansion Bars 1-8 done (safety hardening, Docker backend, MCP client, web retrieval, TUI, repo intelligence, production hygiene, e2e verification + self-audit). Tracked bar-by-bar in `WORK_STATUS.md`.
 - `research/` is local-only reference and git-ignored. Never commit it. `START_HERE.md` and `docs/HANDOFF_AUDIT.md` are git-ignored (machine-specific paths).
 
 ## Architecture map
@@ -45,6 +45,8 @@ pulsar_agent/
   mcp/
     client.py        stdio JSON-RPC MCP client (initialize/list/call)
     manager.py       server lifecycle -> namespaced ToolSpecs (mcp_<srv>_<tool>)
+  intel.py           project map, test discovery, git summary/diffstat
+  cli/tui.py         opt-in Textual TUI (controller + thin app shell)
   sessions/store.py  SQLite WAL + FTS5; redact-before-persist
   memory/store.py    bounded MEMORY.md / USER.md; staged writes
   skills/loader.py   builtin + PULSAR_HOME/skills discovery
@@ -74,11 +76,14 @@ pulsar_agent/
 - Execution backends: local (default, less isolated) and opt-in docker (cap-drop ALL, no-new-privileges, network none, workspace-only mount, resource limits, env allowlist by name, graceful degradation without a daemon).
 - MCP: stdio client, disabled-by-default per-server config, allowlist-first server env, approval kind `mcp` with `allow_mcp` grant, output truncation+redaction, subagent-excluded.
 - Web: GET-only search (duckduckgo no-key default, brave with user key) + extract (HTML→text, metadata header), SSRF policy with per-hop redirect checks, `allow_private_urls` opt-in, `web.enabled` kill switch.
-- Sessions: SQLite+FTS5, list/search/delete.
+- Sessions: SQLite+FTS5 (thread-safe: locked connection), list/search/delete.
 - Memory: bounded Markdown, staged writes with approval.
 - Skills: builtin + user; one builtin (`python-test-and-fix`).
 - Checkpoints: shadow-git, reversible rollback.
-- CLI: REPL, slash commands, setup wizard, sessions subcommands, `--once`.
+- CLI: REPL, slash commands (incl. `/map`), setup wizard, sessions subcommands, `--once`; tool progress lines with per-turn counter + elapsed time; recovery hints on common failures.
+- TUI: `pulsar --tui` (textual extra), status bar, transcript, composer, modal approvals from worker thread, graceful fallback without the dependency.
+- Repo intelligence (`intel.py`): project map (languages, tooling, package managers, key files, CI), test-command inference + targeted-test helper, git summary + diffstat; injected into system prompt as untrusted data.
+- Hygiene: ruff + mypy + bandit + pip-audit configured and passing; GitHub Actions CI (tests on Linux/Windows py3.11-3.12, lint, type check, security scans); coverage via pytest-cov.
 
 ## Known limits / weaknesses (do not forget)
 
@@ -105,9 +110,33 @@ pulsar_agent/
 - Web: HTML cache with ETag revalidation; per-domain rate limiting; resolve-then-pin connections to close the DNS-rebinding gap; `/web` slash command for manual fetches.
 - REPL `/mcp` slash command showing server status + discovered tools.
 
+## Deferred audit findings (P2/P3 accepted for this beta)
+
+Recorded from the Bar 1-8 release self-audit. All P0/P1 were fixed in-pass; the
+items below are accepted with rationale and a next step.
+
+- **P3 — Docker `network`/`image` config is not validated (isolation, not injection).** Files: `pulsar_agent/tools/docker_backend.py`, `config.py`. argv is list-form so there is no shell injection, but `docker.network: host` or a swapped image silently weakens the isolation the backend advertises. Risk: a user who edits their own config can reduce their own sandbox — not a model-reachable escalation. Deferred because it is user-controlled config, not attacker-controlled. Next step: validate `network` against `{none, bridge, host}` and warn (not block) on `host`.
+- **P3 — `pulsar model <id>` (CLI subcommand) validates format only, not resolvability.** File: `pulsar_agent/cli/main.py`. A format-valid but unusable id (e.g. missing key) is saved; the next launch fails with exit 2 plus a `pulsar setup` hint. The interactive `/model` path was hardened to rebuild-before-persist; the one-shot subcommand still writes optimistically. Deferred because full resolution needs the key/secret store and the failure is self-explanatory. Next step: attempt `resolve_runtime_provider` before saving in the subcommand.
+- **P3 — TUI approval modal left after a timeout is cosmetic-stale.** File: `pulsar_agent/cli/tui.py`. On the 600 s approval timeout the request is already denied; a late click on the lingering modal is a no-op but confusing, and the modal blocks input until dismissed. Shutdown now releases pending waits (fixed), but the timeout-then-click cosmetic remains. Next step: auto-dismiss the modal from a timer when its `done` event fires.
+- **P3 — Redactor ignores known secrets shorter than 6 chars.** File: `pulsar_agent/security/redaction.py`. The `len >= 6` gate avoids masking noise, but a very short secret would pass through. Deferred because lowering the threshold produces heavy false-positive redaction of ordinary short tokens. Next step: mask short values only on word boundaries, or make the floor configurable.
+- **P3 — Cooperative cancel is between-iteration, not mid-tool.** Files: `pulsar_agent/run_agent.py`, `cli/tui.py`. Quitting the TUI stops further provider calls and tool dispatches, but a tool already executing (e.g. a long subprocess) runs to completion before the turn unwinds. Deferred because true preemption of a synchronous subprocess needs a process-group kill path. Next step: thread a cancel token into the terminal/docker backends to kill the child on cancel.
+
+## Deferred ideas (valuable, outside current pass)
+
+- OS keychain secret backend (currently `.env` only).
+- Vector/embedding session recall (currently FTS5 only).
+- SSH / remote terminal backends.
+- Provider plugin loading from `PULSAR_HOME/plugins`.
+- MCP HTTP/SSE transport (stdio only today); MCP server auto-restart/reconnect; MCP resources and prompts (tools only today).
+- Smart/LLM-assisted approval classification.
+- Skill hub / install flow.
+- Docker: image pre-pull/health check at startup; per-command container reuse for speed; rootless podman support.
+- Web: HTML cache with ETag revalidation; per-domain rate limiting; resolve-then-pin connections to close the DNS-rebinding gap; `/web` slash command for manual fetches.
+- REPL `/mcp` slash command showing server status + discovered tools.
+
 ## Recommended next additions (after this pass)
 
-- Streaming token output in CLL/TUI.
+- Streaming token output in CLI/TUI.
 - Cost/token budget accounting surfaced per session.
 - Richer diff rendering in TUI.
 - Config schema versioning + migration harness.

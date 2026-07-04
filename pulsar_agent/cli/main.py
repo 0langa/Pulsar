@@ -31,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="MESSAGE",
         help="Run a single non-interactive turn and print the reply",
     )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Start the full-screen TUI (requires the 'tui' extra: "
+        'pip install "pulsar-agent[tui]")',
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("setup", help="Interactive first-run configuration")
@@ -107,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "model":
         try:
             parse_model_id(args.model_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"invalid model id: {exc}", file=sys.stderr)
             return 2
         config["model"] = args.model_id
@@ -123,6 +129,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"workspace {workspace} is not a directory", file=sys.stderr)
         return 2
 
+    if args.tui:
+        if args.once is not None:
+            print("--tui and --once cannot be combined", file=sys.stderr)
+            return 2
+        from pulsar_agent.cli.tui import run_tui
+
+        return run_tui(home, config, workspace)
+
     from pulsar_agent.cli.repl import Repl
 
     try:
@@ -132,17 +146,23 @@ def main(argv: list[str] | None = None) -> int:
             workspace=workspace,
             interactive=args.once is None,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"startup failed: {exc}", file=sys.stderr)
         print("Hint: run `pulsar setup` to configure a provider and key.", file=sys.stderr)
         return 2
 
     if args.once is not None:
+        from pulsar_agent.cli.repl import recovery_hint
+
         try:
             print(repl.run_once(args.once))
             return 0
-        except Exception as exc:  # noqa: BLE001
-            print(f"error: {repl.redactor.redact(str(exc))}", file=sys.stderr)
+        except Exception as exc:
+            message = repl.redactor.redact(str(exc))
+            print(f"error: {message}", file=sys.stderr)
+            hint = recovery_hint(message)
+            if hint:
+                print(f"hint: {hint}", file=sys.stderr)
             return 1
 
     return repl.run()

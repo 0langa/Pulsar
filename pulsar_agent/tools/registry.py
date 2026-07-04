@@ -8,9 +8,9 @@ tool schema stays stable (prompt-cache friendly).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from pulsar_agent.security.approvals import ApprovalManager
 from pulsar_agent.security.paths import PathPolicy
@@ -91,7 +91,7 @@ class ToolRegistry:
             result = spec.handler(arguments or {}, context)
         except PermissionError as exc:
             result = f"BLOCKED: {exc}"
-        except Exception as exc:  # noqa: BLE001 - tool failures go back to the model
+        except Exception as exc:
             result = f"ERROR: {type(exc).__name__}: {exc}"
         result = context.redactor.redact(str(result))
         if len(result) > MAX_TOOL_RESULT_CHARS:

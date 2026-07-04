@@ -80,7 +80,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 CUSTOM_PROVIDER_REQUIRED = ("name", "api_mode", "base_url", "api_key_env_var")
-CUSTOM_PROVIDER_ALLOWED = CUSTOM_PROVIDER_REQUIRED + ("default_model", "requires_key")
+CUSTOM_PROVIDER_ALLOWED = (*CUSTOM_PROVIDER_REQUIRED, "default_model", "requires_key")
 VALID_API_MODES = ("anthropic_messages", "chat_completions", "custom_openai_compatible")
 
 VALID_BACKENDS = ("local", "docker")
@@ -88,7 +88,8 @@ VALID_ENV_MODES = ("allowlist", "scrub")
 VALID_WEB_BACKENDS = ("duckduckgo", "brave")
 
 MCP_SERVER_REQUIRED = ("name", "command")
-MCP_SERVER_ALLOWED = MCP_SERVER_REQUIRED + (
+MCP_SERVER_ALLOWED = (
+    *MCP_SERVER_REQUIRED,
     "args", "cwd", "enabled", "allowed_tools", "env_passthrough", "startup_timeout",
 )
 # Secret-shaped keys that must never appear inline in any config section.
