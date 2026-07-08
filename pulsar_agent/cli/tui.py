@@ -70,6 +70,8 @@ class TuiController:
             return TuiCommand("memory", arg)
         if command == "/usage":
             return TuiCommand("usage")
+        if command == "/mcp":
+            return TuiCommand("mcp")
         return TuiCommand("unknown", command)
 
     def status_text(self) -> str:
@@ -87,7 +89,7 @@ class TuiController:
     def help_text(self) -> str:
         return (
             "TUI commands: /model [provider:model], /memory [approve|discard], "
-            "/usage, /reset, /help, /quit\n"
+            "/usage, /mcp, /reset, /help, /quit\n"
             "Everything else is sent to the agent.\n\n"
             "Classic-CLI command reference:\n" + HELP_TEXT
         )
@@ -112,6 +114,9 @@ class TuiController:
 
     def usage_summary(self) -> str:
         return self.repl.usage.summary(self.repl.config.get("pricing"))
+
+    def mcp_status(self) -> str:
+        return self.repl.mcp_status_text()
 
     def reset(self) -> str:
         self.repl.agent.reset()
@@ -317,6 +322,9 @@ def _build_app(repl: Repl, startup_lines: list[str]):
                 return
             if command.kind == "usage":
                 self._write(controller.usage_summary())
+                return
+            if command.kind == "mcp":
+                self._write(controller.mcp_status())
                 return
             if command.kind == "model":
                 self._write(controller.switch_model(command.arg))

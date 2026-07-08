@@ -349,7 +349,8 @@ def test_oversized_frame_dropped_not_buffered(server_script):
         client.close()
 
 
-def test_server_death_mid_session(config, server_script, workspace, home):
+def test_server_death_auto_restarts(config, server_script, workspace, home):
+    # A crashed server is restarted transparently on the next tool call.
     mcp_config(config, server_entry(server_script))
     manager = make_manager(config)
     try:
@@ -358,11 +359,81 @@ def test_server_death_mid_session(config, server_script, workspace, home):
             registry.register(spec)
         manager.clients["fake"].close()  # simulate crash
         context = make_context(workspace, home, config, approver=lambda r: True)
-        out = registry.dispatch("mcp_fake_echo", {"text": "x"}, context)
-        assert "ERROR" in out
-        assert "stopped" in out
+        out = registry.dispatch("mcp_fake_echo", {"text": "back-again"}, context)
+        assert "back-again" in out
+        assert manager.restarts["fake"] == 1
+        assert manager.clients["fake"].alive()
     finally:
         manager.close()
+
+
+def test_restart_failure_reports_error(config, server_script, workspace, home):
+    mcp_config(config, server_entry(server_script))
+    manager = make_manager(config)
+    try:
+        registry = ToolRegistry()
+        for spec in manager.tool_specs():
+            registry.register(spec)
+        manager.clients["fake"].close()
+        # Break the spec so the restart cannot succeed.
+        manager.specs["fake"].command = "definitely-not-a-real-binary-xyz"
+        context = make_context(workspace, home, config, approver=lambda r: True)
+        out = registry.dispatch("mcp_fake_echo", {"text": "x"}, context)
+        assert "ERROR" in out
+        assert "could not be restarted" in out
+    finally:
+        manager.close()
+
+
+def test_restart_cap_respected(config, server_script, workspace, home):
+    from pulsar_agent.mcp.manager import MAX_AUTO_RESTARTS
+
+    mcp_config(config, server_entry(server_script))
+    manager = make_manager(config)
+    try:
+        registry = ToolRegistry()
+        for spec in manager.tool_specs():
+            registry.register(spec)
+        manager.restarts["fake"] = MAX_AUTO_RESTARTS  # budget exhausted
+        manager.clients["fake"].close()
+        context = make_context(workspace, home, config, approver=lambda r: True)
+        out = registry.dispatch("mcp_fake_echo", {"text": "x"}, context)
+        assert "ERROR" in out
+        assert manager.restarts["fake"] == MAX_AUTO_RESTARTS  # no further attempt
+    finally:
+        manager.close()
+
+
+def test_status_rows(config, server_script):
+    mcp_config(
+        config,
+        server_entry(server_script),
+        server_entry(server_script, name="off", enabled=False),
+        {"name": "broken", "command": "definitely-not-a-real-binary-xyz",
+         "enabled": True},
+    )
+    manager = make_manager(config)
+    try:
+        rows = {row["name"]: row for row in manager.status()}
+        assert rows["fake"]["state"] == "running"
+        assert rows["fake"]["tools"] >= 2
+        assert rows["off"]["state"] == "disabled"
+        assert rows["broken"]["state"] == "failed"
+        assert rows["broken"]["error"]
+    finally:
+        manager.close()
+
+
+def test_mcp_slash_command_without_servers(workspace, home, config, capsys):
+    from pulsar_agent.cli.repl import Repl
+
+    config["model"] = "mock:echo"
+    repl = Repl(home=home, config=config, workspace=workspace, interactive=False)
+    try:
+        assert repl.handle_slash("/mcp") is True
+        assert "no MCP servers configured" in capsys.readouterr().out
+    finally:
+        repl.close()
 
 
 def test_missing_command_fails_gracefully(config):

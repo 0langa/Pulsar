@@ -43,6 +43,7 @@ Slash commands:
   /map                     show the project map and git status
   /memory [approve|discard] show memory; apply/discard staged writes
   /skills                  list discovered skills
+  /mcp                     MCP server status and tool counts
   /checkpoint [label]      create a manual checkpoint
   /rollback [ref]          restore the last (or given) checkpoint
   /reset                   clear the conversation, keep the session
@@ -305,6 +306,22 @@ class Repl:
             f"| backend {backend}"
         )
 
+    def mcp_status_text(self) -> str:
+        rows = self.mcp.status()
+        if not rows:
+            return "no MCP servers configured (mcp.servers in config.yaml)"
+        lines = []
+        for row in rows:
+            line = f"- {row['name']}: {row['state']}"
+            if row["state"] == "running":
+                line += f", {row['tools']} tool(s)"
+            if row["restarts"]:
+                line += f", restarted {row['restarts']}x"
+            if row["error"]:
+                line += f" [{self.redactor.redact(row['error'])[:120]}]"
+            lines.append(line)
+        return "\n".join(lines)
+
     def switch_model(self, model_id: str) -> str:
         """Switch the active model. Rebuilds the agent BEFORE persisting so a
         bad id (bad format, missing key) never gets written to config.yaml and
@@ -359,6 +376,8 @@ class Repl:
                 if self.memory.staged:
                     print(f"\n{len(self.memory.staged)} staged write(s); "
                           "/memory approve or /memory discard")
+        elif command == "/mcp":
+            print(self.mcp_status_text())
         elif command == "/skills":
             if not self.skills:
                 print("no skills found")
