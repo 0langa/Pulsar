@@ -41,6 +41,42 @@ def _docker_cfg(config: dict) -> dict:
     return config.get("docker", {}) or {}
 
 
+def startup_health(config: dict) -> list[str]:
+    """Advisory startup checks when the docker backend is selected: CLI on
+    PATH, daemon reachable, image present locally. Warn-only — commands
+    still fail gracefully per call; this just surfaces the problem before
+    the first tool call instead of during it."""
+    warnings: list[str] = []
+    if str((config.get("terminal", {}) or {}).get("backend", "local")) != "docker":
+        return warnings
+    if not docker_available():
+        return [f"docker backend: {DOCKER_UNAVAILABLE_GUIDANCE}"]
+    env = build_docker_env(config)
+    try:
+        probe = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            env=env, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return [f"docker backend: {DOCKER_UNAVAILABLE_GUIDANCE}"]
+    if probe.returncode != 0:
+        return [f"docker backend: {DOCKER_UNAVAILABLE_GUIDANCE}"]
+    image = str(_docker_cfg(config).get("image", "python:3.11-slim"))
+    try:
+        inspect = subprocess.run(
+            ["docker", "image", "inspect", image],
+            env=env, capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return warnings  # daemon answered above; skip the image check
+    if inspect.returncode != 0:
+        warnings.append(
+            f"docker image {image!r} is not present locally; the first "
+            f"command will be slow or fail. Pre-pull it with: docker pull {image}"
+        )
+    return warnings
+
+
 def build_docker_env(config: dict) -> dict[str, str]:
     """Environment for the docker CLI process itself: fixed baseline plus the
     configured allowlist. Secrets with undeclared names never reach docker."""

@@ -1,6 +1,14 @@
 # Work Status
 
-Status: MVP + full beta expansion (Bars 1-8) implemented, self-audited, and verified. Post-beta pass 1 done: CI landed on GitHub, three deferred P3 audit findings fixed, per-session token/cost accounting added. Post-beta pass 2 done: streaming token output. Post-beta pass 3 done: five highest-value additions (below).
+Status: MVP + full beta expansion (Bars 1-8) implemented, self-audited, and verified. Post-beta passes 1-4 done (P3 fixes + usage accounting; streaming; five robustness additions; trust & completeness).
+
+## Post-beta pass 4 (2026-07-08) — trust & completeness
+
+1. **Provider profiles from `PULSAR_HOME/providers/*.yaml`** — completes the last MVP should-have ("richer provider plugin loading") declaratively: custom_providers schema per file, shared validation incl. inline-secret rejection, broken files skip with startup warnings, config.yaml wins collisions, never persisted into config.yaml, no code execution from PULSAR_HOME. Tests: `tests/test_provider_plugins.py`.
+2. **DNS-rebinding closed** — web fetches resolve-then-pin: each hop connects to the exact vetted IP (Host header + TLS SNI/verification keep the hostname). The SECURITY.md residual risk paragraph is retired. Tests in `tests/test_web_tools.py`.
+3. **Diff-aware approvals** — write_file/patch approvals carry a redacted, size-capped unified diff; console approver prints it, TUI modal renders it markup-escaped; patch computes the updated content before asking. Tests in `tests/test_registry_and_tools.py`.
+4. **Docker startup health check** — with the docker backend selected, startup warns when the CLI/daemon is unavailable or the configured image is not pulled (with the `docker pull` hint). Tests in `tests/test_docker_backend.py`.
+5. **`/web <url>`** — manual read-only fetch in REPL + TUI, dispatched through the registry so it gets identical gating (kill switch, SSRF+pinning, approvals, truncation, redaction). Test in `tests/test_web_tools.py`.
 
 ## Post-beta pass 3 (2026-07-08) — five additions, one commit each
 

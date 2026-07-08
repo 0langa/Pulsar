@@ -205,6 +205,38 @@ def test_no_pinning_with_private_opt_in(workspace, home, config):
     assert requests[0].url.host == "127.0.0.1"  # unchanged; nothing to pin
 
 
+# --- /web slash command -------------------------------------------------
+
+
+def test_web_slash_command(workspace, home, config, monkeypatch, capsys):
+    from pulsar_agent.cli.repl import Repl
+
+    fake_public_dns(monkeypatch, {"docs.example.com": "93.184.216.34"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/plain"}, text="manual fetch body"
+        )
+
+    use_transport(handler)
+    config["model"] = "mock:echo"
+    repl = Repl(home=home, config=config, workspace=workspace, interactive=False)
+    try:
+        assert repl.handle_slash("/web") is True
+        assert "usage: /web" in capsys.readouterr().out
+        assert repl.handle_slash("/web https://docs.example.com/x") is True
+        out = capsys.readouterr().out
+        assert "Status: 200" in out
+        assert "manual fetch body" in out
+        # Kill switch applies to the manual path too.
+        config["web"]["enabled"] = False
+        assert "unknown or disabled" in repl.web_fetch_text(
+            "https://docs.example.com/x"
+        )
+    finally:
+        repl.close()
+
+
 # --- web_extract ------------------------------------------------------
 
 

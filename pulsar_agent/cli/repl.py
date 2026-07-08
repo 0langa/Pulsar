@@ -44,6 +44,7 @@ Slash commands:
   /memory [approve|discard] show memory; apply/discard staged writes
   /skills                  list discovered skills
   /mcp                     MCP server status and tool counts
+  /web <url>               fetch a page read-only (same policy as web_extract)
   /checkpoint [label]      create a manual checkpoint
   /rollback [ref]          restore the last (or given) checkpoint
   /reset                   clear the conversation, keep the session
@@ -184,6 +185,11 @@ class Repl:
             warn=lambda message: print(f"  [mcp] {self.redactor.redact(message)}"),
         )
         self.mcp.start()
+        if str((config.get("terminal", {}) or {}).get("backend", "local")) == "docker":
+            from pulsar_agent.tools.docker_backend import startup_health
+
+            for warning in startup_health(config):
+                print(f"  [docker] {self.redactor.redact(warning)}")
         # Streaming display only makes sense interactively; --once returns the
         # final text. Line-buffered so redaction sees complete lines.
         self.stream_sink: StreamSink | None = None
@@ -337,6 +343,16 @@ class Repl:
             f"| backend {backend}"
         )
 
+    def web_fetch_text(self, url: str) -> str:
+        if not url:
+            return "usage: /web <url>"
+        # Dispatch through the registry so the fetch gets the same gating as
+        # the model's web_extract: web.enabled check, SSRF policy + pinning,
+        # approvals, truncation, redaction.
+        return self.agent.registry.dispatch(
+            "web_extract", {"url": url}, self.agent.context
+        )
+
     def mcp_status_text(self) -> str:
         rows = self.mcp.status()
         if not rows:
@@ -409,6 +425,8 @@ class Repl:
                           "/memory approve or /memory discard")
         elif command == "/mcp":
             print(self.mcp_status_text())
+        elif command == "/web":
+            print(self.web_fetch_text(arg))
         elif command == "/skills":
             if not self.skills:
                 print("no skills found")

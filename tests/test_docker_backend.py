@@ -216,6 +216,44 @@ def test_docker_python_output_truncated(workspace, config, monkeypatch):
     assert "[output truncated]" in out
 
 
+# --- startup health check ----------------------------------------------
+
+
+def test_health_silent_for_local_backend(config):
+    assert docker_backend.startup_health(config) == []
+
+
+def test_health_warns_when_docker_missing(config, monkeypatch):
+    docker_config(config)
+    monkeypatch.setattr(docker_backend, "docker_available", lambda: False)
+    warnings = docker_backend.startup_health(config)
+    assert warnings and DOCKER_UNAVAILABLE_GUIDANCE in warnings[0]
+
+
+def test_health_warns_on_missing_image(config, monkeypatch):
+    docker_config(config, image="python:3.11-slim")
+    monkeypatch.setattr(docker_backend, "docker_available", lambda: True)
+
+    def fake_run(argv, **kwargs):
+        if argv[:2] == ["docker", "info"]:
+            return subprocess.CompletedProcess(argv, 0, "27.0", "")
+        return subprocess.CompletedProcess(argv, 1, "", "No such image")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    warnings = docker_backend.startup_health(config)
+    assert warnings and "docker pull python:3.11-slim" in warnings[0]
+
+
+def test_health_clean_when_daemon_and_image_present(config, monkeypatch):
+    docker_config(config)
+    monkeypatch.setattr(docker_backend, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "ok", ""),
+    )
+    assert docker_backend.startup_health(config) == []
+
+
 # --- best-effort integration (skips cleanly without a working daemon) ---
 
 

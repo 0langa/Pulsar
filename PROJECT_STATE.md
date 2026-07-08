@@ -112,7 +112,7 @@ pulsar_agent/
 - MCP HTTP/SSE transport (stdio only today); MCP resources and prompts (tools only today). (Auto-restart + `/mcp` status landed in post-beta pass 3.)
 - Smart/LLM-assisted approval classification.
 - Skill hub / install flow.
-- Docker: image pre-pull/health check at startup; per-command container reuse for speed; rootless podman support.
+- Docker: per-command container reuse for speed; rootless podman support. (Startup health check — daemon + image presence with pre-pull hint — landed in post-beta pass 4.)
 - Web: HTML cache with ETag revalidation; per-domain rate limiting. (Resolve-then-pin landed in post-beta pass 4; `/web` slash command also pass 4.)
 - ~~REPL `/mcp` slash command~~ — done (post-beta pass 3; REPL + TUI).
 
