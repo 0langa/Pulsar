@@ -108,7 +108,7 @@ pulsar_agent/
 - OS keychain secret backend (currently `.env` only).
 - Vector/embedding session recall (currently FTS5 only).
 - SSH / remote terminal backends.
-- Provider plugin loading from `PULSAR_HOME/plugins`.
+- ~~Provider plugin loading~~ — done (post-beta pass 4): declarative profiles in `PULSAR_HOME/providers/*.yaml` (custom_providers schema, validated incl. inline-secret rejection, broken files skip with a startup warning, config.yaml entries win collisions, never persisted into config.yaml). Deliberately NOT code plugins — nothing executes from PULSAR_HOME.
 - MCP HTTP/SSE transport (stdio only today); MCP resources and prompts (tools only today). (Auto-restart + `/mcp` status landed in post-beta pass 3.)
 - Smart/LLM-assisted approval classification.
 - Skill hub / install flow.

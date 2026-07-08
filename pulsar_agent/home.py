@@ -8,7 +8,7 @@ from pathlib import Path
 ENV_VAR = "PULSAR_HOME"
 DEFAULT_DIRNAME = ".pulsar"
 
-SUBDIRS = ("memories", "skills", "checkpoints", "logs")
+SUBDIRS = ("memories", "skills", "checkpoints", "logs", "providers")
 
 
 def get_pulsar_home() -> Path:

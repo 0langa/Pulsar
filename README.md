@@ -155,6 +155,10 @@ Grants take effect **only** under `trusted-local`; `review`/`paranoid` ignore th
 
 Subprocess environment handling is allowlist-first by default (`terminal.env_mode: allowlist`): child processes receive only a fixed baseline plus variables you name in `terminal.env_passthrough`, so a secret with a bland variable name is not inherited. `scrub` mode (drop only secret-named variables) is available but weaker.
 
+## Custom providers
+
+Beyond `custom_providers` in `config.yaml`, drop one YAML file per provider into `PULSAR_HOME/providers/` (same fields: `name`, `api_mode`, `base_url`, `api_key_env_var`, optional `default_model`/`requires_key`). Files are declarative only — Pulsar never executes code from `PULSAR_HOME`. Inline secrets are rejected; keys stay in `PULSAR_HOME/.env`.
+
 ## Streaming
 
 Assistant text streams line-by-line as it arrives (SSE) in the REPL and TUI. On by default; disable with `streaming: false` in `config.yaml`. Servers that reject streaming (some local/proxy endpoints) fall back to a normal request automatically. Output is line-buffered so secret redaction always sees complete lines.

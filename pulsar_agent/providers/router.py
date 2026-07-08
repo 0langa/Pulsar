@@ -99,7 +99,13 @@ def parse_model_id(model_id: str) -> tuple[str, str]:
 
 def _custom_profiles(config: dict) -> dict[str, ProviderProfile]:
     profiles: dict[str, ProviderProfile] = {}
-    for entry in config.get("custom_providers") or []:
+    # Discovered PULSAR_HOME/providers/*.yaml profiles first, then
+    # config.yaml custom_providers — config wins a name collision.
+    entries = [
+        *(config.get("provider_plugins") or []),
+        *(config.get("custom_providers") or []),
+    ]
+    for entry in entries:
         name = str(entry["name"]).lower()
         profiles[name] = ProviderProfile(
             name=name,

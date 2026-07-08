@@ -176,6 +176,33 @@ def deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def validate_provider_entry(entry: object, source: str = "custom provider") -> None:
+    """Shared schema check for config `custom_providers` entries and
+    PULSAR_HOME/providers/*.yaml plugin files."""
+    if not isinstance(entry, dict):
+        raise ConfigError(f"{source} must be a mapping")
+    for banned in ("api_key", "apikey", "token", "secret"):
+        if banned in {k.lower() for k in entry}:
+            raise ConfigError(
+                f"{source} {entry.get('name', '?')!r} contains an inline "
+                f"secret field {banned!r}; secrets belong in PULSAR_HOME/.env "
+                "and profiles must reference api_key_env_var instead"
+            )
+    missing = [k for k in CUSTOM_PROVIDER_REQUIRED if not entry.get(k)]
+    if missing:
+        raise ConfigError(
+            f"{source} {entry.get('name', '?')!r} missing fields: {missing}"
+        )
+    if entry["api_mode"] not in VALID_API_MODES:
+        raise ConfigError(
+            f"{source} {entry['name']!r} has invalid api_mode "
+            f"{entry['api_mode']!r}; valid: {VALID_API_MODES}"
+        )
+    unknown = [k for k in entry if k not in CUSTOM_PROVIDER_ALLOWED]
+    if unknown:
+        raise ConfigError(f"{source} {entry['name']!r} has unknown fields: {unknown}")
+
+
 def validate_config(config: dict) -> None:
     preset = config.get("approval_preset")
     if preset not in APPROVAL_PRESETS:
@@ -189,30 +216,7 @@ def validate_config(config: dict) -> None:
     if not isinstance(providers, list):
         raise ConfigError("custom_providers must be a list")
     for entry in providers:
-        if not isinstance(entry, dict):
-            raise ConfigError("custom_providers entries must be mappings")
-        for banned in ("api_key", "apikey", "token", "secret"):
-            if banned in {k.lower() for k in entry}:
-                raise ConfigError(
-                    f"custom provider {entry.get('name', '?')!r} contains an inline "
-                    f"secret field {banned!r}; secrets belong in PULSAR_HOME/.env "
-                    "and config must reference api_key_env_var instead"
-                )
-        missing = [k for k in CUSTOM_PROVIDER_REQUIRED if not entry.get(k)]
-        if missing:
-            raise ConfigError(
-                f"custom provider {entry.get('name', '?')!r} missing fields: {missing}"
-            )
-        if entry["api_mode"] not in VALID_API_MODES:
-            raise ConfigError(
-                f"custom provider {entry['name']!r} has invalid api_mode "
-                f"{entry['api_mode']!r}; valid: {VALID_API_MODES}"
-            )
-        unknown = [k for k in entry if k not in CUSTOM_PROVIDER_ALLOWED]
-        if unknown:
-            raise ConfigError(
-                f"custom provider {entry['name']!r} has unknown fields: {unknown}"
-            )
+        validate_provider_entry(entry)
 
     _validate_terminal_and_docker(config)
     _validate_mcp(config)
@@ -326,7 +330,7 @@ def _validate_mcp(config: dict) -> None:
 def config_warnings(config: dict) -> list[str]:
     """Advisory (non-fatal) findings: configurations that are valid but weaken
     a protection the defaults provide. Callers print these at startup."""
-    warnings: list[str] = []
+    warnings: list[str] = list(config.get("_plugin_warnings") or [])
     terminal = config.get("terminal", {}) or {}
     docker = config.get("docker", {}) or {}
     if (
@@ -340,6 +344,31 @@ def config_warnings(config: dict) -> list[str]:
             "need host networking."
         )
     return warnings
+
+
+def load_provider_plugins(home: Path) -> tuple[list[dict], list[str]]:
+    """Discover declarative provider profiles in PULSAR_HOME/providers/*.yaml
+    (one mapping per file, same schema as a custom_providers entry). No code
+    is ever loaded or executed from there. A broken file is skipped with a
+    warning — a bad plugin must not brick startup."""
+    root = home / "providers"
+    entries: list[dict] = []
+    warnings: list[str] = []
+    if not root.is_dir():
+        return entries, warnings
+    for path in sorted([*root.glob("*.yaml"), *root.glob("*.yml")]):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            warnings.append(f"provider plugin {path.name}: unreadable ({exc})")
+            continue
+        try:
+            validate_provider_entry(data, source=f"provider plugin {path.name}")
+        except ConfigError as exc:
+            warnings.append(str(exc))
+            continue
+        entries.append(data)
+    return entries, warnings
 
 
 def load_config(home: Path) -> dict:
@@ -359,11 +388,20 @@ def load_config(home: Path) -> dict:
                 encoding="utf-8",
             )
     config = deep_merge(DEFAULT_CONFIG, user_cfg)
+    # Runtime-injected, never persisted (save_config strips it): discovered
+    # profiles live in their own files, not in config.yaml.
+    plugins, plugin_warnings = load_provider_plugins(home)
+    config["provider_plugins"] = plugins
+    config["_plugin_warnings"] = plugin_warnings
     validate_config(config)
     return config
 
 
 def save_config(home: Path, config: dict) -> Path:
+    config = {
+        k: v for k, v in config.items()
+        if k not in ("provider_plugins", "_plugin_warnings")
+    }
     validate_config(config)
     path = home / CONFIG_FILENAME
     path.write_text(
