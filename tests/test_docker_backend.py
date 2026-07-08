@@ -7,6 +7,7 @@ import pytest
 
 from pulsar_agent.security.redaction import Redactor
 from pulsar_agent.tools import build_core_registry, docker_backend
+from pulsar_agent.tools.cancellable import RunOutcome
 from pulsar_agent.tools.docker_backend import (
     DOCKER_UNAVAILABLE_GUIDANCE,
     build_docker_command,
@@ -86,11 +87,15 @@ def test_docker_timeout_kills_container(workspace, config, monkeypatch):
     monkeypatch.setattr(docker_backend, "docker_available", lambda: True)
     killed: list[list[str]] = []
 
+    monkeypatch.setattr(
+        "pulsar_agent.tools.cancellable.run_cancellable",
+        lambda *a, **k: RunOutcome(-1, "", "", timed_out=True),
+    )
+
     def fake_run(argv, **kwargs):
         if argv[:2] == ["docker", "kill"]:
             killed.append(argv)
-            return subprocess.CompletedProcess(argv, 0, "", "")
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 1))
+        return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     code, output = run_in_docker("sleep 999", str(workspace), config)
@@ -99,15 +104,37 @@ def test_docker_timeout_kills_container(workspace, config, monkeypatch):
     assert killed and killed[0][2].startswith("pulsar-")
 
 
-def test_docker_daemon_down_guidance(workspace, config, monkeypatch):
+def test_docker_cancel_kills_container(workspace, config, monkeypatch):
     monkeypatch.setattr(docker_backend, "docker_available", lambda: True)
+    killed: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "pulsar_agent.tools.cancellable.run_cancellable",
+        lambda *a, **k: RunOutcome(-1, "", "", cancelled=True),
+    )
 
     def fake_run(argv, **kwargs):
-        return subprocess.CompletedProcess(
-            argv, 1, "", "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"
-        )
+        if argv[:2] == ["docker", "kill"]:
+            killed.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    code, output = run_in_docker(
+        "sleep 999", str(workspace), config, should_cancel=lambda: True
+    )
+    assert code == 130
+    assert "cancelled" in output
+    assert killed and killed[0][2].startswith("pulsar-")
+
+
+def test_docker_daemon_down_guidance(workspace, config, monkeypatch):
+    monkeypatch.setattr(docker_backend, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        "pulsar_agent.tools.cancellable.run_cancellable",
+        lambda *a, **k: RunOutcome(
+            1, "", "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"
+        ),
+    )
     code, output = run_in_docker("echo hi", str(workspace), config)
     assert code == 127
     assert DOCKER_UNAVAILABLE_GUIDANCE in output
@@ -120,7 +147,7 @@ def test_terminal_backend_selection_docker(workspace, home, config, monkeypatch)
     docker_config(config)
     calls: list[str] = []
 
-    def fake_run_in_docker(command, ws, cfg):
+    def fake_run_in_docker(command, ws, cfg, should_cancel=None):
         calls.append(command)
         return 0, "docker-ran"
 
@@ -135,7 +162,7 @@ def test_execute_code_backend_selection_docker(workspace, home, config, monkeypa
     docker_config(config)
     calls: list[str] = []
 
-    def fake_run_python(code, ws, cfg, timeout):
+    def fake_run_python(code, ws, cfg, timeout, should_cancel=None):
         calls.append(code)
         return "[ok]\npython-in-docker"
 
@@ -164,7 +191,8 @@ def test_docker_output_redacted(workspace, home, config, monkeypatch):
     docker_config(config)
     secret = "sk-docker-leak-abcdef1234567890"
     monkeypatch.setattr(
-        docker_backend, "run_in_docker", lambda c, w, cfg: (0, f"token: {secret}")
+        docker_backend, "run_in_docker",
+        lambda c, w, cfg, should_cancel=None: (0, f"token: {secret}"),
     )
     context = make_context(
         workspace, home, config,
@@ -180,10 +208,10 @@ def test_docker_python_output_truncated(workspace, config, monkeypatch):
     monkeypatch.setattr(docker_backend, "docker_available", lambda: True)
     config["docker"]["output_limit_bytes"] = 50
 
-    def fake_run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 0, "y" * 500, "")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        "pulsar_agent.tools.cancellable.run_cancellable",
+        lambda *a, **k: RunOutcome(0, "y" * 500, ""),
+    )
     out = run_python_in_docker("print('y'*500)", str(workspace), config, 30)
     assert "[output truncated]" in out
 

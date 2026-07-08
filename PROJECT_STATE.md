@@ -42,6 +42,7 @@ pulsar_agent/
     file_tools.py    read_file, write_file, patch, search_files
     terminal.py      terminal (backend-aware); allowlist/scrub env builders
     execute_code.py  execute_code (backend-aware)
+    cancellable.py   cancel-aware subprocess runner (process-tree kill)
     docker_backend.py opt-in hardened docker run for terminal/execute_code
     web_tools.py     read-only web_search + web_extract with SSRF policy
     todo.py          per-session todo list
@@ -124,7 +125,7 @@ items below are accepted with rationale and a next step.
 - ~~P3 — `pulsar model <id>` validates format only~~ **Fixed in post-beta pass 1**: the subcommand resolves the provider (profile + key presence) before persisting.
 - ~~P3 — TUI approval modal cosmetic-stale after timeout~~ **Fixed in post-beta pass 1**: the modal denies-and-dismisses from its own `set_timer` (UI thread, same idempotent `_finish` path as a click); the worker keeps only a backstop wait. Do NOT pop a textual screen cross-thread — it deadlocks the screen-close await chain (verified with task-stack probes).
 - **P3 — Redactor ignores known secrets shorter than 6 chars.** File: `pulsar_agent/security/redaction.py`. The `len >= 6` gate avoids masking noise, but a very short secret would pass through. Deferred because lowering the threshold produces heavy false-positive redaction of ordinary short tokens. Next step: mask short values only on word boundaries, or make the floor configurable.
-- **P3 — Cooperative cancel is between-iteration, not mid-tool.** Files: `pulsar_agent/run_agent.py`, `cli/tui.py`. Quitting the TUI stops further provider calls and tool dispatches, but a tool already executing (e.g. a long subprocess) runs to completion before the turn unwinds. Deferred because true preemption of a synchronous subprocess needs a process-group kill path. Next step: thread a cancel token into the terminal/docker backends to kill the child on cancel.
+- ~~P3 — Cooperative cancel is between-iteration, not mid-tool~~ **Fixed in post-beta pass 3**: `tools/cancellable.py` polls the cancel callable while the child runs and kills the whole process tree (taskkill /F /T on Windows, killpg on POSIX); docker cancel also kills the container. Terminal, execute_code, and both docker paths use it via `ToolContext.should_cancel`.
 
 ## Recommended next additions (after this pass)
 
@@ -132,4 +133,4 @@ items below are accepted with rationale and a next step.
 - ~~Cost/token budget accounting surfaced per session~~ — done (post-beta pass 1, `usage.py`, `/usage`). Possible follow-ups: persist totals per session in SQLite; budget warnings at a configured token ceiling.
 - Richer diff rendering in TUI.
 - Config schema versioning + migration harness.
-- Mid-tool cancellation (thread a cancel token into terminal/docker backends; today cancel is between-iteration).
+- ~~Mid-tool cancellation~~ — done (post-beta pass 3, `tools/cancellable.py`).

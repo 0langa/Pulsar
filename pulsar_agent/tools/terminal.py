@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Callable
 
 from pulsar_agent.security.approvals import KIND_TERMINAL, ApprovalRequest
 from pulsar_agent.security.command_risk import (
@@ -96,26 +97,29 @@ def run_scrubbed(
     return completed.returncode, output
 
 
-def run_local_command(command: str, cwd: str, config: dict) -> tuple[int, str]:
+def run_local_command(
+    command: str,
+    cwd: str,
+    config: dict,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[int, str]:
+    from pulsar_agent.tools.cancellable import run_cancellable
+
     terminal_cfg = config.get("terminal", {}) or {}
     timeout = int(terminal_cfg.get("timeout_seconds", 120))
-    try:
-        completed = subprocess.run(
-            command,
-            shell=True,
-            cwd=cwd,
-            env=build_subprocess_env(config),
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return 124, f"[command timed out after {timeout}s]"
-    output = (completed.stdout or "") + (
-        ("\n[stderr]\n" + completed.stderr) if completed.stderr else ""
+    outcome = run_cancellable(
+        command,
+        shell=True,
+        cwd=cwd,
+        env=build_subprocess_env(config),
+        timeout=timeout,
+        should_cancel=should_cancel,
     )
-    return completed.returncode, output
+    if outcome.cancelled:
+        return 130, (outcome.merged_output() + "\n[command cancelled by user]").lstrip("\n")
+    if outcome.timed_out:
+        return 124, f"[command timed out after {timeout}s]"
+    return outcome.returncode, outcome.merged_output()
 
 
 def terminal_handler(args: dict, context: ToolContext) -> str:
@@ -150,9 +154,15 @@ def terminal_handler(args: dict, context: ToolContext) -> str:
     if backend == "docker":
         from pulsar_agent.tools.docker_backend import run_in_docker
 
-        code, output = run_in_docker(command, str(context.workspace), context.config)
+        code, output = run_in_docker(
+            command, str(context.workspace), context.config,
+            should_cancel=context.should_cancel,
+        )
     else:
-        code, output = run_local_command(command, str(context.workspace), context.config)
+        code, output = run_local_command(
+            command, str(context.workspace), context.config,
+            should_cancel=context.should_cancel,
+        )
 
     limit = int(terminal_cfg.get("output_limit_bytes", 20000))
     if len(output) > limit:

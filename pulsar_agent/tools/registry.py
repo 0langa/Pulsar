@@ -39,6 +39,9 @@ class ToolContext:
     on_tool_event: Callable[[str, str], None] | None = None
     # Shared token/cost counters; subagents inherit the parent's tracker.
     usage: UsageTracker = field(default_factory=UsageTracker)
+    # Cooperative cancel, polled by long-running backends (terminal,
+    # execute_code, docker) so a child process dies mid-run on quit.
+    should_cancel: Callable[[], bool] | None = None
 
     def emit(self, event: str, detail: str) -> None:
         if self.on_tool_event:

@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from collections.abc import Callable
 
 from pulsar_agent.tools.terminal import allowlist_environment
 
@@ -112,46 +113,59 @@ def _run(
     config: dict,
     timeout: int,
     stdin_text: str | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[int, str]:
+    from pulsar_agent.tools.cancellable import run_cancellable
+
     if not docker_available():
         return 127, f"ERROR: {DOCKER_UNAVAILABLE_GUIDANCE}"
     env = build_docker_env(config)
     try:
-        completed = subprocess.run(
+        outcome = run_cancellable(
             argv,
-            input=stdin_text,
             env=env,
-            capture_output=True,
-            text=True,
-            errors="replace",
             timeout=timeout,
+            should_cancel=should_cancel,
+            stdin_text=stdin_text,
         )
-    except subprocess.TimeoutExpired:
-        _kill_container(_container_name(argv), env)
-        return 124, f"[command timed out after {timeout}s in docker]"
     except FileNotFoundError:
         return 127, f"ERROR: {DOCKER_UNAVAILABLE_GUIDANCE}"
-    stderr = completed.stderr or ""
-    if completed.returncode != 0 and (
+    if outcome.cancelled or outcome.timed_out:
+        # Killing the docker CLI detaches the container but does not stop it;
+        # kill the container itself as well.
+        _kill_container(_container_name(argv), env)
+        if outcome.cancelled:
+            return 130, "[command cancelled by user; container killed]"
+        return 124, f"[command timed out after {timeout}s in docker]"
+    stderr = outcome.stderr or ""
+    if outcome.returncode != 0 and (
         "Cannot connect to the Docker daemon" in stderr
         or "error during connect" in stderr
         or "docker daemon is not running" in stderr.lower()
     ):
         return 127, f"ERROR: {DOCKER_UNAVAILABLE_GUIDANCE}\n[docker said]\n{stderr.strip()}"
-    output = (completed.stdout or "") + (("\n[stderr]\n" + stderr) if stderr else "")
-    return completed.returncode, output
+    return outcome.returncode, outcome.merged_output()
 
 
-def run_in_docker(command: str, workspace: str, config: dict) -> tuple[int, str]:
+def run_in_docker(
+    command: str,
+    workspace: str,
+    config: dict,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[int, str]:
     """Run a shell command inside the configured container image."""
     cfg = _docker_cfg(config)
     timeout = int(cfg.get("timeout_seconds", 120))
     argv = build_docker_command(["sh", "-c", command], workspace, config)
-    return _run(argv, config, timeout)
+    return _run(argv, config, timeout, should_cancel=should_cancel)
 
 
 def run_python_in_docker(
-    code: str, workspace: str, config: dict, timeout: int
+    code: str,
+    workspace: str,
+    config: dict,
+    timeout: int,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str:
     """Run a Python snippet inside the container via stdin (`python -`), so the
     code never lands in the workspace or the process argv."""
@@ -160,7 +174,9 @@ def run_python_in_docker(
     argv = build_docker_command(
         ["python", "-I", "-"], workspace, config, interactive=True
     )
-    returncode, output = _run(argv, config, timeout, stdin_text=code)
+    returncode, output = _run(
+        argv, config, timeout, stdin_text=code, should_cancel=should_cancel
+    )
     limit = int(cfg.get("output_limit_bytes", 20000))
     if len(output) > limit:
         output = output[:limit] + "\n[output truncated]"

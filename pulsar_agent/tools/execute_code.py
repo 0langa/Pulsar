@@ -8,7 +8,6 @@ embeds hardline shell patterns is refused.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -45,7 +44,12 @@ def execute_code_handler(args: dict, context: ToolContext) -> str:
     if backend == "docker":
         from pulsar_agent.tools.docker_backend import run_python_in_docker
 
-        return run_python_in_docker(code, str(context.workspace), context.config, timeout)
+        return run_python_in_docker(
+            code, str(context.workspace), context.config, timeout,
+            should_cancel=context.should_cancel,
+        )
+
+    from pulsar_agent.tools.cancellable import run_cancellable
 
     with tempfile.NamedTemporaryFile(
         "w", suffix=".py", delete=False, encoding="utf-8"
@@ -53,26 +57,24 @@ def execute_code_handler(args: dict, context: ToolContext) -> str:
         handle.write(code)
         script_path = Path(handle.name)
     try:
-        completed = subprocess.run(
+        outcome = run_cancellable(
             [sys.executable, "-I", str(script_path)],
             cwd=str(context.workspace),
             env=build_subprocess_env(context.config),
-            capture_output=True,
-            text=True,
-            errors="replace",
             timeout=timeout,
+            should_cancel=context.should_cancel,
         )
-    except subprocess.TimeoutExpired:
-        return f"ERROR: code timed out after {timeout}s"
     finally:
         try:
             script_path.unlink()
         except OSError:
             pass
-    output = (completed.stdout or "") + (
-        ("\n[stderr]\n" + completed.stderr) if completed.stderr else ""
-    )
-    status = "ok" if completed.returncode == 0 else f"exit code {completed.returncode}"
+    if outcome.cancelled:
+        return "ERROR: code cancelled by user"
+    if outcome.timed_out:
+        return f"ERROR: code timed out after {timeout}s"
+    output = outcome.merged_output()
+    status = "ok" if outcome.returncode == 0 else f"exit code {outcome.returncode}"
     return f"[{status}]\n{output}".rstrip() or f"[{status}]"
 
 

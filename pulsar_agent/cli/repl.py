@@ -223,6 +223,7 @@ class Repl:
             transport=transport,
             on_tool_event=self._emit_tool_event,
             usage=self.usage,
+            should_cancel=lambda: self._cancelled,
         )
         system_prompt = build_system_prompt(
             workspace=self.workspace,
