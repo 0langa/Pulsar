@@ -137,6 +137,74 @@ def test_redirect_into_private_range_blocked(workspace, home, config, monkeypatc
     assert all(r.method == "GET" for r in requests)
 
 
+# --- resolve-then-pin (DNS rebinding) ----------------------------------
+
+
+def test_connection_pinned_to_validated_ip(workspace, home, config, monkeypatch):
+    fake_public_dns(monkeypatch, {"docs.example.com": "93.184.216.34"})
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/plain"}, text="ok")
+
+    use_transport(handler)
+    context = make_context(workspace, home, config)
+    out = build_core_registry().dispatch(
+        "web_extract", {"url": "https://docs.example.com:8443/x"}, context
+    )
+    assert "Status: 200" in out
+    request = requests[0]
+    # The transport never sees the hostname: it connects to the vetted IP.
+    assert request.url.host == "93.184.216.34"
+    assert request.url.port == 8443
+    assert request.headers["host"] == "docs.example.com:8443"
+    assert request.extensions.get("sni_hostname") == "docs.example.com"
+
+
+def test_rebinding_second_resolution_never_happens(
+    workspace, home, config, monkeypatch
+):
+    # A rebinding server answers public on the validation lookup and private
+    # afterwards. Pinning means there IS no second lookup: the request goes
+    # to the first vetted address.
+    answers = iter(["93.184.216.34", "10.0.0.5", "10.0.0.5"])
+
+    def rebinding_getaddrinfo(host, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (next(answers), 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_getaddrinfo)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/plain"}, text="ok")
+
+    use_transport(handler)
+    context = make_context(workspace, home, config)
+    out = build_core_registry().dispatch(
+        "web_extract", {"url": "https://rebind.example.com/"}, context
+    )
+    assert "Status: 200" in out
+    assert requests[0].url.host == "93.184.216.34"
+
+
+def test_no_pinning_with_private_opt_in(workspace, home, config):
+    config["web"]["allow_private_urls"] = True
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/plain"}, text="ok")
+
+    use_transport(handler)
+    context = make_context(workspace, home, config)
+    build_core_registry().dispatch(
+        "web_extract", {"url": "http://127.0.0.1:8000/docs"}, context
+    )
+    assert requests[0].url.host == "127.0.0.1"  # unchanged; nothing to pin
+
+
 # --- web_extract ------------------------------------------------------
 
 

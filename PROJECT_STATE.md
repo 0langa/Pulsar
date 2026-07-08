@@ -98,7 +98,7 @@ pulsar_agent/
 - Redaction cannot mask a secret it has never seen that also matches no pattern. Allowlist-first subprocess env mode reduces this for child processes.
 - Windows is the primary dev platform; POSIX paths in hardline patterns are covered but real-world coverage is Windows-tested.
 - Checkpoints protect workspace files only, not external state (DBs, remote, cloud).
-- Web SSRF check resolves DNS separately from the request → DNS rebinding is a residual risk (documented in SECURITY.md). A fetched URL is also an outbound data channel; `paranoid` prompts per fetch.
+- Web fetches resolve-then-pin (post-beta pass 4): connections go to the vetted IP with Host/SNI kept, closing the DNS-rebinding gap. A fetched URL is still an outbound data channel; `paranoid` prompts per fetch.
 - DuckDuckGo HTML search backend is markup-scrape best-effort; can rate-limit or silently break. Brave backend (user key) is the reliable path.
 - Docker timeout is client-side with best-effort `docker kill`; a wedged daemon can still leave a container.
 - MCP auto-restart is capped at 3 per server per run; a server flapping past that stays down until pulsar restarts. A restarted server is assumed to offer the same tools (the model schema is fixed per session); a tool that vanished after restart errors per call.
@@ -113,7 +113,7 @@ pulsar_agent/
 - Smart/LLM-assisted approval classification.
 - Skill hub / install flow.
 - Docker: image pre-pull/health check at startup; per-command container reuse for speed; rootless podman support.
-- Web: HTML cache with ETag revalidation; per-domain rate limiting; resolve-then-pin connections to close the DNS-rebinding gap; `/web` slash command for manual fetches.
+- Web: HTML cache with ETag revalidation; per-domain rate limiting. (Resolve-then-pin landed in post-beta pass 4; `/web` slash command also pass 4.)
 - ~~REPL `/mcp` slash command~~ — done (post-beta pass 3; REPL + TUI).
 
 ## Deferred audit findings (P2/P3 accepted for this beta)

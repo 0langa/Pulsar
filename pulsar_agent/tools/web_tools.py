@@ -10,10 +10,10 @@ SSRF policy (on by default, opt-out via `web.allow_private_urls`):
   link-local (cloud metadata 169.254.169.254), reserved, multicast ranges
 - redirects re-checked hop by hop, so a public page cannot bounce the
   client into an internal address
-
-Known limit: the check resolves DNS separately from the request, so a
-DNS-rebinding server could theoretically pass the check and rebind. This is
-documented in SECURITY.md; `paranoid` preset prompts on every fetch.
+- resolve-then-pin: the connection goes to the exact IP that passed the
+  check (Host header and TLS SNI/verification keep the original hostname),
+  so a DNS-rebinding server cannot pass validation with a public address
+  and then serve the request from a private one
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import json
 import socket
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlsplit
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -77,8 +77,9 @@ def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-def check_url(url: str, config: dict) -> None:
-    """Raise UrlBlocked unless the URL passes the SSRF policy."""
+def _validated_addresses(url: str, config: dict) -> list:
+    """SSRF policy core: raise UrlBlocked or return the vetted addresses.
+    Empty list means "no pinning needed" (policy opted out)."""
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
         raise UrlBlocked(
@@ -89,7 +90,7 @@ def check_url(url: str, config: dict) -> None:
     if not host:
         raise UrlBlocked("URL has no hostname")
     if _web_cfg(config).get("allow_private_urls", False):
-        return
+        return []
     lowered = host.lower().rstrip(".")
     if lowered in BLOCKED_HOSTNAMES or lowered.endswith(".localhost"):
         raise UrlBlocked(
@@ -116,6 +117,43 @@ def check_url(url: str, config: dict) -> None:
                 "link-local/metadata range); blocked by SSRF policy. Set "
                 "web.allow_private_urls: true to opt in to internal URLs"
             )
+    return addresses
+
+
+def check_url(url: str, config: dict) -> None:
+    """Raise UrlBlocked unless the URL passes the SSRF policy."""
+    _validated_addresses(url, config)
+
+
+def _pin_request(url: str, config: dict) -> tuple[str, dict, dict]:
+    """Validate the URL and pin the connection to the vetted IP.
+
+    Returns (request_url, extra_headers, extensions). The request URL swaps
+    the hostname for the validated IP so the transport cannot re-resolve DNS
+    (rebinding); the Host header and TLS SNI/verification keep the original
+    hostname. With allow_private_urls (or an IP-literal host) there is
+    nothing to pin and the URL passes through unchanged.
+    """
+    addresses = _validated_addresses(url, config)
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if not addresses:
+        return url, {}, {}
+    try:
+        ipaddress.ip_address(host.lower().rstrip("."))
+        return url, {}, {}  # already an IP literal; nothing to rebind
+    except ValueError:
+        pass
+    pinned = addresses[0]
+    ip_text = f"[{pinned}]" if pinned.version == 6 else str(pinned)
+    netloc = ip_text + (f":{parts.port}" if parts.port else "")
+    request_url = urlunsplit(
+        (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
+    )
+    host_header = host + (f":{parts.port}" if parts.port else "")
+    headers = {"Host": host_header}
+    extensions = {"sni_hostname": host} if parts.scheme == "https" else {}
+    return request_url, headers, extensions
 
 
 def _make_client(config: dict) -> httpx.Client:
@@ -149,8 +187,10 @@ def fetch_url(url: str, config: dict) -> FetchResult:
     current = url
     with _make_client(config) as client:
         for _ in range(MAX_REDIRECTS + 1):
-            check_url(current, config)
-            with client.stream("GET", current) as response:
+            request_url, pin_headers, pin_extensions = _pin_request(current, config)
+            with client.stream(
+                "GET", request_url, headers=pin_headers, extensions=pin_extensions
+            ) as response:
                 if response.is_redirect:
                     location = response.headers.get("location", "")
                     if not location:

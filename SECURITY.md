@@ -72,11 +72,12 @@ MCP servers are third-party code running on your machine. Enabling one is equiva
 `web_search` / `web_extract` are read-only by construction: the implementation issues only GET requests, sends no cookies or credentials, and has no POST/upload path.
 
 - SSRF policy (default on): only http/https; loopback, private, link-local (incl. cloud metadata `169.254.169.254`), reserved, and multicast ranges are blocked for both literal IPs and every resolved address; redirects are re-validated hop by hop; `file:` and other schemes are always refused
+- resolve-then-pin: each request connects to the exact IP that passed validation (Host header and TLS SNI/verification keep the original hostname), so a DNS-rebinding server cannot answer public for the check and private for the fetch
 - `web.allow_private_urls: true` is the explicit opt-in for internal URLs; it never unlocks `file:` URLs
 - responses are size-capped (`web.max_bytes`), text-capped (`web.text_limit`), and redacted before console, session DB, and model context
 - under `paranoid`, every fetch requires approval; `review`/`trusted-local` auto-approve because the tools are read-only
 
-Web-specific limits: a fetched URL is also an outbound channel — a prompt-injected page could ask the model to encode data into a subsequent request's query string. Redaction masks known secrets in tool *output*, not in requested URLs; `paranoid` puts a human in front of every request. The SSRF check resolves DNS separately from the request, so a DNS-rebinding server could theoretically pass validation; treat `allow_private_urls` and rebinding as residual risks and keep the default policy on for untrusted content.
+Web-specific limits: a fetched URL is also an outbound channel — a prompt-injected page could ask the model to encode data into a subsequent request's query string. Redaction masks known secrets in tool *output*, not in requested URLs; `paranoid` puts a human in front of every request. `allow_private_urls` disables both the range checks and connection pinning — keep the default policy on for untrusted content.
 
 ## TUI
 
