@@ -6,6 +6,7 @@ Secrets never live here; they belong in PULSAR_HOME/.env (see secrets.py).
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +14,15 @@ import yaml
 
 CONFIG_FILENAME = "config.yaml"
 
+# Bump when a config change needs an in-place migration of user files
+# (renames/removals/semantic changes). Purely additive keys do NOT need a
+# bump — deep_merge fills them from DEFAULT_CONFIG.
+CONFIG_VERSION = 2
+
 APPROVAL_PRESETS = ("paranoid", "review", "trusted-local")
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "version": 1,
+    "version": CONFIG_VERSION,
     "model": "anthropic:claude-sonnet-5",
     "approval_preset": "review",
     "max_iterations": 40,
@@ -113,6 +119,47 @@ INLINE_SECRET_KEYS = ("api_key", "apikey", "token", "secret", "password", "crede
 
 class ConfigError(ValueError):
     pass
+
+
+def _migrate_v1_to_v2(user_cfg: dict) -> dict:
+    """v1 -> v2: all v2 additions (streaming, pricing, budget) are additive
+    with safe defaults, so nothing to rewrite — this migration exists to
+    exercise the harness and stamp the version. Future migrations that
+    rename or remove keys follow this shape."""
+    return user_cfg
+
+
+# One entry per version step: MIGRATIONS[n] takes a version-n user config
+# and returns version n+1 content (the harness stamps the number).
+MIGRATIONS: dict[int, Callable[[dict], dict]] = {
+    1: _migrate_v1_to_v2,
+}
+
+
+def migrate_config(user_cfg: dict) -> tuple[dict, bool]:
+    """Bring a user config file's content up to CONFIG_VERSION. Returns the
+    migrated mapping and whether anything changed (=> caller persists it)."""
+    try:
+        version = int(user_cfg.get("version", 1) or 1)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"config version must be an integer, got {user_cfg.get('version')!r}"
+        ) from None
+    if version > CONFIG_VERSION:
+        raise ConfigError(
+            f"config.yaml is version {version}, but this pulsar understands up "
+            f"to {CONFIG_VERSION}; upgrade pulsar or remove the version key"
+        )
+    migrated = False
+    while version < CONFIG_VERSION:
+        migration = MIGRATIONS.get(version)
+        if migration is None:
+            raise ConfigError(f"no migration path from config version {version}")
+        user_cfg = migration(dict(user_cfg))
+        version += 1
+        user_cfg["version"] = version
+        migrated = True
+    return user_cfg, migrated
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -293,6 +340,14 @@ def load_config(home: Path) -> dict:
         if loaded is not None and not isinstance(loaded, dict):
             raise ConfigError(f"{path} must contain a YAML mapping")
         user_cfg = loaded or {}
+        user_cfg, migrated = migrate_config(user_cfg)
+        if migrated:
+            # Persist the migrated *user* content (not the merged defaults,
+            # which would freeze today's defaults into the file).
+            path.write_text(
+                yaml.safe_dump(user_cfg, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
     config = deep_merge(DEFAULT_CONFIG, user_cfg)
     validate_config(config)
     return config

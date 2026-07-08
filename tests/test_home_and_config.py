@@ -3,13 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from pulsar_agent.config import (
+    CONFIG_FILENAME,
+    CONFIG_VERSION,
     DEFAULT_CONFIG,
     ConfigError,
     config_warnings,
     deep_merge,
     load_config,
+    migrate_config,
     save_config,
     validate_config,
 )
@@ -101,6 +105,48 @@ def test_docker_image_must_be_nonempty_string():
         config = deep_merge(DEFAULT_CONFIG, {"docker": {"image": bad}})
         with pytest.raises(ConfigError, match=r"docker\.image"):
             validate_config(config)
+
+
+def test_migrate_v1_file_rewritten_and_user_keys_kept(home):
+    path = home / CONFIG_FILENAME
+    path.write_text(
+        yaml.safe_dump({"version": 1, "model": "mock:echo",
+                        "terminal": {"timeout_seconds": 7}}),
+        encoding="utf-8",
+    )
+    config = load_config(home)
+    assert config["version"] == CONFIG_VERSION
+    assert config["model"] == "mock:echo"
+    assert config["terminal"]["timeout_seconds"] == 7
+    on_disk = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert on_disk["version"] == CONFIG_VERSION
+    assert on_disk["model"] == "mock:echo"
+    # Only the user's keys are persisted, not the merged defaults.
+    assert "web" not in on_disk
+
+
+def test_missing_version_treated_as_v1():
+    migrated_cfg, migrated = migrate_config({"model": "mock:echo"})
+    assert migrated is True
+    assert migrated_cfg["version"] == CONFIG_VERSION
+
+
+def test_current_version_is_noop():
+    migrated_cfg, migrated = migrate_config({"version": CONFIG_VERSION})
+    assert migrated is False
+    assert migrated_cfg["version"] == CONFIG_VERSION
+
+
+def test_future_version_rejected(home):
+    path = home / CONFIG_FILENAME
+    path.write_text(yaml.safe_dump({"version": CONFIG_VERSION + 7}), encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"newer|understands"):
+        load_config(home)
+
+
+def test_garbage_version_rejected():
+    with pytest.raises(ConfigError, match="version"):
+        migrate_config({"version": "banana"})
 
 
 def test_host_network_warns_only_with_docker_backend():
