@@ -1,6 +1,10 @@
 # Work Status
 
-Status: MVP + full beta expansion (Bars 1-8) implemented, self-audited, and verified. Post-beta pass 1 done: CI landed on GitHub, three deferred P3 audit findings fixed, per-session token/cost accounting added.
+Status: MVP + full beta expansion (Bars 1-8) implemented, self-audited, and verified. Post-beta pass 1 done: CI landed on GitHub, three deferred P3 audit findings fixed, per-session token/cost accounting added. Post-beta pass 2 done: streaming token output.
+
+## Post-beta pass 2 (2026-07-08)
+
+- **Streaming token output** (`streaming: true` default, config-toggleable). Both HTTP transports stream SSE when the display layer passes an `on_text` sink; parsing lives in pure functions (`iter_sse_data`, `fold_anthropic_stream`, `fold_openai_stream`) tested without a network. A 4xx on the streaming request falls back to non-streaming (401/403/429 still raise). Display goes through `StreamSink`: line-buffered so the redactor always sees complete lines (a secret split across deltas can't leak); REPL suppresses the duplicate final print, TUI transcript receives streamed lines via its swapped-in sink. `--once` and subagents stay non-streaming. Usage recording unchanged (stream usage folded from message_start/message_delta or the include_usage chunk). Tests: `tests/test_streaming.py` (11).
 
 Public repository: https://github.com/0langa/Pulsar (`origin`, branch `main`).
 

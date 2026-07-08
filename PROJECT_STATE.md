@@ -75,7 +75,7 @@ pulsar_agent/
 
 (Updated as bars land — see WORK_STATUS.md for pass/fail evidence.)
 
-- Providers: anthropic_messages, chat_completions, custom_openai_compatible, local presets (ollama, lmstudio), mock. Fallback chain on retryable errors.
+- Providers: anthropic_messages, chat_completions, custom_openai_compatible, local presets (ollama, lmstudio), mock. Fallback chain on retryable errors. SSE streaming (default on, `streaming: false` to disable) with automatic non-streaming fallback when a server rejects it; mock transport streams two deterministic chunks.
 - Tools: read_file, write_file, patch, search_files, terminal, execute_code, todo, delegate_task; plus config-gated web_search/web_extract and namespaced MCP tools.
 - Execution backends: local (default, less isolated) and opt-in docker (cap-drop ALL, no-new-privileges, network none, workspace-only mount, resource limits, env allowlist by name, graceful degradation without a daemon).
 - MCP: stdio client, disabled-by-default per-server config, allowlist-first server env, approval kind `mcp` with `allow_mcp` grant, output truncation+redaction, subagent-excluded.
@@ -128,7 +128,7 @@ items below are accepted with rationale and a next step.
 
 ## Recommended next additions (after this pass)
 
-- Streaming token output in CLI/TUI.
+- ~~Streaming token output in CLI/TUI~~ — done (post-beta pass 2). SSE streaming in both HTTP transports (`stream: true`; OpenAI also `stream_options.include_usage`), pure fold functions (`fold_anthropic_stream`/`fold_openai_stream`) unit-testable without a network, 4xx-on-stream falls back to non-streaming (auth/rate errors still raise). Display is line-buffered through `StreamSink` (repl.py) so redaction always sees complete lines — never flush partial lines on a size boundary, a secret split across deltas would slip through. `streaming: true` config toggle; `--once` and subagents stay non-streaming. Known limits: line-granularity display (not per-token); a mid-stream provider failure that triggers a fallback transport can re-print already-streamed partial text.
 - ~~Cost/token budget accounting surfaced per session~~ — done (post-beta pass 1, `usage.py`, `/usage`). Possible follow-ups: persist totals per session in SQLite; budget warnings at a configured token ceiling.
 - Richer diff rendering in TUI.
 - Config schema versioning + migration harness.

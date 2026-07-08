@@ -155,6 +155,10 @@ Grants take effect **only** under `trusted-local`; `review`/`paranoid` ignore th
 
 Subprocess environment handling is allowlist-first by default (`terminal.env_mode: allowlist`): child processes receive only a fixed baseline plus variables you name in `terminal.env_passthrough`, so a secret with a bland variable name is not inherited. `scrub` mode (drop only secret-named variables) is available but weaker.
 
+## Streaming
+
+Assistant text streams line-by-line as it arrives (SSE) in the REPL and TUI. On by default; disable with `streaming: false` in `config.yaml`. Servers that reject streaming (some local/proxy endpoints) fall back to a normal request automatically. Output is line-buffered so secret redaction always sees complete lines.
+
 ## Sessions, memory, skills, checkpoints
 
 - Sessions persist to SQLite (`PULSAR_HOME/state.db`) with FTS5 search: `pulsar sessions list|search|delete`.

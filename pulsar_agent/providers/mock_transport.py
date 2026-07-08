@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from pulsar_agent.providers.base import CompletionResult, ToolCallRequest, Transport
@@ -32,8 +33,22 @@ class MockTransport(Transport):
         self._index = 0
 
     def complete(
-        self, system: str, messages: list[dict], tools: list[dict], max_tokens: int
+        self,
+        system: str,
+        messages: list[dict],
+        tools: list[dict],
+        max_tokens: int,
+        on_text: Callable[[str], None] | None = None,
     ) -> CompletionResult:
+        result = self._next_result(messages)
+        if on_text is not None and result.text:
+            # Two deterministic chunks so streaming sinks are exercised.
+            half = max(1, len(result.text) // 2)
+            on_text(result.text[:half])
+            on_text(result.text[half:])
+        return result
+
+    def _next_result(self, messages: list[dict]) -> CompletionResult:
         if self._steps is not None and self._index < len(self._steps):
             step = self._steps[self._index]
             self._index += 1

@@ -335,8 +335,16 @@ def _build_app(repl: Repl, startup_lines: list[str]):
         def _run_turn(self, text: str) -> None:
             try:
                 reply = controller.run_message(text)
-                self.call_from_thread(self._write, reply)
+                sink = repl.stream_sink
+                if sink is not None and sink.streamed:
+                    # Streamed lines are already in the transcript (the sink
+                    # routes through the swapped-in assistant-text callback).
+                    sink.flush()
+                else:
+                    self.call_from_thread(self._write, reply)
             except Exception as exc:
+                if repl.stream_sink is not None:
+                    repl.stream_sink.flush()
                 message = repl.redactor.redact(str(exc))
                 self.call_from_thread(self._write, f"[error] {message}")
                 hint = recovery_hint(message)

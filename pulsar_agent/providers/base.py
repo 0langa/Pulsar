@@ -13,6 +13,7 @@ parameters is a JSON schema object. Transports adapt both directions.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 
@@ -46,5 +47,10 @@ class Transport(ABC):
         messages: list[dict],
         tools: list[dict],
         max_tokens: int,
+        on_text: Callable[[str], None] | None = None,
     ) -> CompletionResult:
+        """Run one completion. When `on_text` is given, transports that can
+        stream call it with incremental text deltas as they arrive; the full
+        CompletionResult is still returned at the end either way. Transports
+        without streaming support may ignore `on_text`."""
         ...

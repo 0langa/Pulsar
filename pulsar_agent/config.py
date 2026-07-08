@@ -21,6 +21,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "approval_preset": "review",
     "max_iterations": 40,
     "max_tokens": 8192,
+    # Stream assistant text line-by-line as it arrives (interactive only).
+    # Transports fall back to non-streaming if the server rejects it.
+    "streaming": True,
     "fallback_models": [],
     "custom_providers": [],
     "terminal": {
@@ -123,6 +126,9 @@ def validate_config(config: dict) -> None:
         raise ConfigError(
             f"approval_preset must be one of {APPROVAL_PRESETS}, got {preset!r}"
         )
+    streaming = config.get("streaming", True)
+    if not isinstance(streaming, bool):
+        raise ConfigError(f"streaming must be true or false, got {streaming!r}")
     providers = config.get("custom_providers") or []
     if not isinstance(providers, list):
         raise ConfigError("custom_providers must be a list")

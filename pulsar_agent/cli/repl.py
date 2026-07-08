@@ -81,6 +81,39 @@ def recovery_hint(error_text: str) -> str | None:
     return None
 
 
+class StreamSink:
+    """Line-buffered sink for streamed assistant text. Deltas accumulate
+    until a newline so the redactor always sees complete lines — a secret
+    split across two deltas (or a flush boundary) would otherwise slip
+    through unmasked. flush() emits the remainder at turn end."""
+
+    def __init__(
+        self, redact: Callable[[str], str], emit: Callable[[str], None]
+    ):
+        self._redact = redact
+        self._emit = emit
+        self._buffer = ""
+        self.streamed = False
+
+    def write(self, delta: str) -> None:
+        if not delta:
+            return
+        self.streamed = True
+        self._buffer += delta
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._emit(self._redact(line))
+
+    def flush(self) -> None:
+        if self._buffer:
+            self._emit(self._redact(self._buffer))
+            self._buffer = ""
+
+    def reset(self) -> None:
+        self._buffer = ""
+        self.streamed = False
+
+
 def _console_approver(request: ApprovalRequest) -> bool:
     print(f"\n[approval needed] {request.kind}")
     print(f"  command : {request.description}")
@@ -142,6 +175,13 @@ class Repl:
             warn=lambda message: print(f"  [mcp] {self.redactor.redact(message)}"),
         )
         self.mcp.start()
+        # Streaming display only makes sense interactively; --once returns the
+        # final text. Line-buffered so redaction sees complete lines.
+        self.stream_sink: StreamSink | None = None
+        if interactive and bool(config.get("streaming", True)):
+            self.stream_sink = StreamSink(
+                redact=self.redactor.redact, emit=self._emit_stream_line
+            )
         self._agent: Agent | None = None
         self.model_id: str = config.get("model", "")
         self._build_agent(new_session=True)
@@ -210,6 +250,7 @@ class Repl:
             # Indirection so a caller (TUI) that swaps its sink after build
             # still receives assistant text.
             on_assistant_text=self._emit_assistant_text,
+            on_stream_text=self.stream_sink.write if self.stream_sink else None,
             should_cancel=lambda: self._cancelled,
             usage=self.usage,
         )
@@ -219,6 +260,15 @@ class Repl:
             self._on_assistant_text(text)
         else:
             print(f"\n{text}\n")
+
+    def _emit_stream_line(self, line: str) -> None:
+        # Routed like _emit_assistant_text so the TUI's swapped-in sink also
+        # receives streamed lines; plain lines (no blank padding) for the
+        # console so consecutive stream lines read as one message.
+        if self._on_assistant_text is not None:
+            self._on_assistant_text(line)
+        else:
+            print(line)
 
     def _emit_tool_event(self, event: str, detail: str) -> None:
         """Progress line with per-turn tool counter and elapsed seconds so
@@ -236,6 +286,8 @@ class Repl:
     def start_turn_clock(self) -> None:
         self._turn_started = time.monotonic()
         self._tool_counter = 0
+        if self.stream_sink is not None:
+            self.stream_sink.reset()
 
     def status_line(self) -> str:
         preset = self.approvals.preset
@@ -374,11 +426,20 @@ class Repl:
                 try:
                     self.start_turn_clock()
                     reply = self.agent.run_turn(line)
-                    print(f"\n{reply}\n")
+                    if self.stream_sink is not None and self.stream_sink.streamed:
+                        # Reply already on screen as streamed lines.
+                        self.stream_sink.flush()
+                        print()
+                    else:
+                        print(f"\n{reply}\n")
                 except KeyboardInterrupt:
                     # run_turn already repaired history for the next turn.
+                    if self.stream_sink is not None:
+                        self.stream_sink.flush()
                     print("\n[turn interrupted]")
                 except Exception as exc:
+                    if self.stream_sink is not None:
+                        self.stream_sink.flush()
                     message = self.redactor.redact(str(exc))
                     print(f"\n[error] {message}")
                     hint = recovery_hint(message)

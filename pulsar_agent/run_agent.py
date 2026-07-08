@@ -30,6 +30,10 @@ class Agent:
     max_tokens: int = 8192
     fallback_transports: list[Transport] = field(default_factory=list)
     on_assistant_text: Callable[[str], None] | None = None
+    # Incremental text deltas from streaming transports. When set, the sink
+    # owns ALL assistant-text display for the turn (on_assistant_text is not
+    # called for streamed completions, which would duplicate the output).
+    on_stream_text: Callable[[str], None] | None = None
     # Cooperative cancel: checked before each iteration so a running turn stops
     # making provider calls / tool actions once the TUI user quits.
     should_cancel: Callable[[], bool] | None = None
@@ -84,9 +88,18 @@ class Agent:
         last_error: ProviderError | None = None
         for index, transport in enumerate(transports):
             try:
-                result = transport.complete(
-                    self.system_prompt, self.messages, self._schemas(), self.max_tokens
-                )
+                if self.on_stream_text is not None:
+                    result = transport.complete(
+                        self.system_prompt,
+                        self.messages,
+                        self._schemas(),
+                        self.max_tokens,
+                        on_text=self.on_stream_text,
+                    )
+                else:
+                    result = transport.complete(
+                        self.system_prompt, self.messages, self._schemas(), self.max_tokens
+                    )
                 self.usage.record(result.usage)
                 return result
             except ProviderError as exc:
@@ -127,7 +140,7 @@ class Agent:
             if result.text:
                 safe_text = self.context.redactor.redact(result.text)
                 self._persist("assistant", safe_text)
-                if result.tool_calls:
+                if result.tool_calls and self.on_stream_text is None:
                     self._emit_assistant(safe_text)
 
             if not result.tool_calls:
