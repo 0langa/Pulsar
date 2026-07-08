@@ -196,11 +196,14 @@ def _docker_usable() -> bool:
         return False
     try:
         probe = subprocess.run(
-            ["docker", "info"], capture_output=True, timeout=15
+            ["docker", "info", "--format", "{{.OSType}}"],
+            capture_output=True, timeout=15, text=True,
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return probe.returncode == 0
+    # The integration image is Linux-only; a Windows-containers daemon (e.g.
+    # a GitHub windows runner) passes `docker info` but cannot run it.
+    return probe.returncode == 0 and probe.stdout.strip() == "linux"
 
 
 @pytest.mark.skipif(not _docker_usable(), reason="docker daemon not available")
