@@ -124,6 +124,11 @@ def _console_approver(request: ApprovalRequest) -> bool:
     if request.detail:
         print(f"  reason  : {request.detail}")
     print(f"  checkpoint: {'yes (rollback available)' if request.will_checkpoint else 'no'}")
+    if request.diff:
+        print("  --- proposed change ---")
+        for line in request.diff.splitlines():
+            print(f"  {line}")
+        print("  -----------------------")
     answer = input("Approve? [y/N]: ").strip().lower()
     return answer in ("y", "yes")
 

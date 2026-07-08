@@ -200,6 +200,16 @@ def _build_app(repl: Repl, startup_lines: list[str]):
 
         def compose(self) -> ComposeResult:
             request = self._request
+            diff_block = ""
+            if request.diff:
+                from rich.markup import escape
+
+                # Modal space is tight; the producer already caps the diff.
+                lines = request.diff.splitlines()
+                shown = [escape(line) for line in lines[:30]]
+                if len(lines) > 30:
+                    shown.append("(diff shortened for display)")
+                diff_block = "\n\n[dim]" + "\n".join(shown) + "[/dim]"
             body = (
                 f"[b]Approval needed: {request.kind}[/b]\n\n"
                 f"{request.description}\n"
@@ -208,6 +218,7 @@ def _build_app(repl: Repl, startup_lines: list[str]):
                 + (f"\ncwd: {request.cwd}" if request.cwd else "")
                 + ("\ncheckpoint: yes (rollback available)"
                    if request.will_checkpoint else "")
+                + diff_block
             )
             yield Vertical(
                 Static(body, id="approval-body"),

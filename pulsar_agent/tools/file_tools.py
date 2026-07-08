@@ -6,6 +6,7 @@ in the same session unless the file is new. Writes checkpoint first.
 
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import os
 import re
@@ -22,6 +23,8 @@ from pulsar_agent.tools.registry import ToolContext, ToolSpec
 MAX_READ_LINES = 2000
 MAX_LINE_CHARS = 2000
 MAX_SEARCH_RESULTS = 100
+MAX_DIFF_LINES = 80
+MAX_DIFF_CHARS = 6000
 SKIP_DIRS = {
     ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build", ".tox",
@@ -39,6 +42,26 @@ def _checkpoint(context: ToolContext, label: str) -> None:
             store.snapshot(label)  # type: ignore[attr-defined]
         except Exception as exc:
             context.emit("warn", f"checkpoint failed: {exc}")
+
+
+def _approval_diff(context: ToolContext, old: str, new: str, name: str) -> str:
+    """Redacted, size-capped unified diff for the approval prompt."""
+    lines = list(
+        difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=f"a/{name}", tofile=f"b/{name}", lineterm="",
+        )
+    )
+    if not lines:
+        return ""
+    truncated = len(lines) > MAX_DIFF_LINES
+    text = "\n".join(lines[:MAX_DIFF_LINES])
+    if len(text) > MAX_DIFF_CHARS:
+        text = text[:MAX_DIFF_CHARS]
+        truncated = True
+    if truncated:
+        text += "\n[diff truncated]"
+    return context.redactor.redact(text)
 
 
 def _mark_read(context: ToolContext, path: Path) -> None:
@@ -87,13 +110,20 @@ def write_file_handler(args: dict, context: ToolContext) -> str:
             f"ERROR: {raw_path} exists but has not been read this session; "
             "read it first, or use patch for edits"
         )
+    previous = ""
+    if exists:
+        try:
+            previous = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            previous = ""
     context.approvals.check(
         ApprovalRequest(
             kind=KIND_WRITE,
             description=f"write {path} ({len(content)} chars)",
-            detail="file write",
+            detail="file write" if exists else "new file",
             cwd=str(context.workspace),
             will_checkpoint=context.checkpoints is not None,
+            diff=_approval_diff(context, previous, content, path.name),
         )
     )
     _checkpoint(context, f"before write_file {path.name}")
@@ -136,6 +166,7 @@ def patch_handler(args: dict, context: ToolContext) -> str:
                     kind=KIND_WRITE, description=f"patch {path}", detail="file patch",
                     cwd=str(context.workspace),
                     will_checkpoint=context.checkpoints is not None,
+                    diff=_approval_diff(context, text, new_content, path.name),
                 )
             )
             _checkpoint(context, f"before patch {path.name}")
@@ -147,20 +178,21 @@ def patch_handler(args: dict, context: ToolContext) -> str:
             f"ERROR: old_text matches {count} times in {raw_path}; "
             "add surrounding context or set replace_all=true"
         )
+    replaced = count if replace_all else 1
+    updated = (
+        text.replace(old_text, new_text) if replace_all
+        else text.replace(old_text, new_text, 1)
+    )
     context.approvals.check(
         ApprovalRequest(
             kind=KIND_WRITE, description=f"patch {path}", detail="file patch",
             cwd=str(context.workspace),
             will_checkpoint=context.checkpoints is not None,
+            diff=_approval_diff(context, text, updated, path.name),
         )
     )
     _checkpoint(context, f"before patch {path.name}")
-    replaced = count if replace_all else 1
-    path.write_text(
-        text.replace(old_text, new_text) if replace_all
-        else text.replace(old_text, new_text, 1),
-        encoding="utf-8",
-    )
+    path.write_text(updated, encoding="utf-8")
     return f"patched {raw_path} ({replaced} replacement{'s' if replaced != 1 else ''})"
 
 

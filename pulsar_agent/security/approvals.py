@@ -64,6 +64,10 @@ class ApprovalRequest:
     detail: str = ""
     cwd: str = ""
     will_checkpoint: bool = False
+    # Unified diff of the proposed change (already redacted and size-capped
+    # by the producer); approvers render it so the user reviews what actually
+    # changes, not just a filename.
+    diff: str = ""
 
 
 @dataclass

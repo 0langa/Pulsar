@@ -50,6 +50,73 @@ def test_dispatch_unknown_tool(context):
     assert "unknown or disabled" in registry.dispatch("nope", {}, context)
 
 
+def test_write_approval_carries_diff(workspace, home, config):
+    captured = []
+
+    def approver(request):
+        captured.append(request)
+        return True
+
+    context = make_context(workspace, home, config, approver=approver)
+    context.approvals.preset = "paranoid"  # force the approver to run
+    registry = build_core_registry()
+    registry.dispatch(
+        "write_file", {"path": "notes.txt", "content": "alpha\nbeta\n"}, context
+    )
+    new_file_request = captured[-1]
+    assert "+alpha" in new_file_request.diff
+    assert new_file_request.detail == "new file"
+
+    registry.dispatch("read_file", {"path": "notes.txt"}, context)
+    registry.dispatch(
+        "patch",
+        {"path": "notes.txt", "old_text": "beta", "new_text": "gamma"},
+        context,
+    )
+    patch_request = captured[-1]
+    assert "-beta" in patch_request.diff
+    assert "+gamma" in patch_request.diff
+    assert "a/notes.txt" in patch_request.diff
+
+
+def test_approval_diff_is_redacted(workspace, home, config):
+    from pulsar_agent.security.redaction import Redactor
+
+    secret = "sk-diff-leak-abcdef1234567890"
+    captured = []
+
+    def approver(request):
+        captured.append(request)
+        return True
+
+    context = make_context(
+        workspace, home, config, approver=approver, redactor=Redactor([secret])
+    )
+    context.approvals.preset = "paranoid"
+    registry = build_core_registry()
+    registry.dispatch(
+        "write_file", {"path": "cfg.txt", "content": f"token={secret}\n"}, context
+    )
+    assert secret not in captured[-1].diff
+    assert "[REDACTED]" in captured[-1].diff
+
+
+def test_approval_diff_truncated(workspace, home, config):
+    captured = []
+
+    def approver(request):
+        captured.append(request)
+        return True
+
+    context = make_context(workspace, home, config, approver=approver)
+    context.approvals.preset = "paranoid"
+    registry = build_core_registry()
+    big = "\n".join(f"line {i}" for i in range(500)) + "\n"
+    registry.dispatch("write_file", {"path": "big.txt", "content": big}, context)
+    assert "[diff truncated]" in captured[-1].diff
+    assert len(captured[-1].diff) < 8000
+
+
 def test_dispatch_redacts_results(workspace, home, config):
     from pulsar_agent.security.redaction import Redactor
 
