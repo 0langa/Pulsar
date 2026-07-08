@@ -1,6 +1,14 @@
 # Work Status
 
-Status: MVP + full beta expansion (Bars 1-8) implemented, self-audited, and verified. Post-beta pass 1 done: CI landed on GitHub, three deferred P3 audit findings fixed, per-session token/cost accounting added. Post-beta pass 2 done: streaming token output.
+Status: MVP + full beta expansion (Bars 1-8) implemented, self-audited, and verified. Post-beta pass 1 done: CI landed on GitHub, three deferred P3 audit findings fixed, per-session token/cost accounting added. Post-beta pass 2 done: streaming token output. Post-beta pass 3 done: five highest-value additions (below).
+
+## Post-beta pass 3 (2026-07-08) — five additions, one commit each
+
+1. **Mid-tool cancellation** (`tools/cancellable.py`). Cancel used to stop only between tool dispatches; a running subprocess kept going after quit. Backends now poll the cancel flag (0.2s) and kill the whole process tree (taskkill /F /T on Windows, killpg on POSIX); docker cancel also kills the container. Partial output preserved. Tests: `tests/test_cancellable.py`.
+2. **MCP resilience.** Crashed stdio servers auto-restart on the next tool call (handlers resolve their client through the manager at call time; captured clients would be stale), capped at 3 restarts per server per run. `/mcp` (REPL + TUI) shows per-server state, tool counts, restarts, redacted errors. Tests in `tests/test_mcp_client.py`.
+3. **Durable usage accounting.** `sessions.input_tokens/output_tokens` columns (in-place ALTER for old DBs); `Repl.finish_turn` persists each turn's counters (REPL/TUI/--once); `pulsar sessions list` shows totals; `budget.session_tokens` warns once per session when crossed (warn-only). Tests in `tests/test_usage.py`.
+4. **Config schema versioning.** `CONFIG_VERSION` (2) + `MIGRATIONS` chain: user files migrate in place on load, only user keys written back, future versions refuse with guidance. Additive keys need no bump. Tests in `tests/test_home_and_config.py`.
+5. **Redaction hardening (P3).** 3-5 char known secrets mask as standalone tokens (lookaround-anchored); 6+ mask anywhere; `security.redaction_min_length` (3-6) configures the floor. Tests in `tests/test_secrets_and_redaction.py`.
 
 ## Post-beta pass 2 (2026-07-08)
 

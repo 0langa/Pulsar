@@ -78,7 +78,8 @@ no_implicit_optional = true
 [tool.bandit]
 exclude_dirs = ["tests", "research", ".venv"]
 # Justified skips — each is load-bearing product behavior, not an oversight:
-# B404/B603/B602/B607: subprocess and shell execution IS the terminal tool;
-#   every invocation is risk-classified, approval-gated, env-scrubbed (see
-#   SECURITY.md). B110: deliberate best-effort cleanup paths.
-skips = ["B404", "B603", "B602", "B607", "B110"]
+# B404/B603/B602/B604/B607: subprocess and shell execution IS the terminal
+#   tool; every invocation is risk-classified, approval-gated, env-scrubbed
+#   (see SECURITY.md). B604 is the same shell=True moved into the shared
+#   cancellable runner. B110: deliberate best-effort cleanup paths.
+skips = ["B404", "B603", "B602", "B604", "B607", "B110"]
