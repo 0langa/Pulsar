@@ -79,6 +79,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "input_per_mtok": 0.0,
         "output_per_mtok": 0.0,
     },
+    "budget": {
+        # Warn (never block) once a session's total tokens (in+out) cross
+        # this. 0 disables the warning.
+        "session_tokens": 0,
+    },
     "checkpoints": {
         "enabled": True,
     },
@@ -174,6 +179,12 @@ def _validate_pricing(config: dict) -> None:
             raise ConfigError(f"pricing.{key} must be a number, got {value!r}") from None
         if number < 0:
             raise ConfigError(f"pricing.{key} must be >= 0, got {value!r}")
+    budget = config.get("budget", {}) or {}
+    tokens = budget.get("session_tokens", 0)
+    if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0:
+        raise ConfigError(
+            f"budget.session_tokens must be a non-negative integer, got {tokens!r}"
+        )
 
 
 def _validate_web(config: dict) -> None:

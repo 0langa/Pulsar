@@ -130,7 +130,7 @@ items below are accepted with rationale and a next step.
 ## Recommended next additions (after this pass)
 
 - ~~Streaming token output in CLI/TUI~~ — done (post-beta pass 2). SSE streaming in both HTTP transports (`stream: true`; OpenAI also `stream_options.include_usage`), pure fold functions (`fold_anthropic_stream`/`fold_openai_stream`) unit-testable without a network, 4xx-on-stream falls back to non-streaming (auth/rate errors still raise). Display is line-buffered through `StreamSink` (repl.py) so redaction always sees complete lines — never flush partial lines on a size boundary, a secret split across deltas would slip through. `streaming: true` config toggle; `--once` and subagents stay non-streaming. Known limits: line-granularity display (not per-token); a mid-stream provider failure that triggers a fallback transport can re-print already-streamed partial text.
-- ~~Cost/token budget accounting surfaced per session~~ — done (post-beta pass 1, `usage.py`, `/usage`). Possible follow-ups: persist totals per session in SQLite; budget warnings at a configured token ceiling.
+- ~~Cost/token budget accounting surfaced per session~~ — done (post-beta pass 1, `usage.py`, `/usage`). Follow-ups done in post-beta pass 3: per-session totals persisted in SQLite (`sessions.input_tokens/output_tokens`, migrated in place on old DBs), shown by `pulsar sessions list`; `budget.session_tokens` warns once per session when crossed (warn-only, never blocks).
 - Richer diff rendering in TUI.
 - Config schema versioning + migration harness.
 - ~~Mid-tool cancellation~~ — done (post-beta pass 3, `tools/cancellable.py`).

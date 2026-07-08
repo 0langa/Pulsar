@@ -147,6 +147,7 @@ class Repl:
         self._turn_started = 0.0
         self._tool_counter = 0
         self._cancelled = False
+        self._budget_warned: set[str] = set()
         # One tracker for the whole run; survives model switches and /new.
         self.usage = UsageTracker()
         self.secrets = SecretStore(home)
@@ -291,6 +292,29 @@ class Repl:
         if self.stream_sink is not None:
             self.stream_sink.reset()
 
+    def finish_turn(self) -> str | None:
+        """Persist the turn's token counts onto the session row and return a
+        budget warning string when the session just crossed the configured
+        ceiling (warn-only; never blocks)."""
+        session_id = self.agent.context.session_id
+        turn_in = self.usage.turn_input_tokens
+        turn_out = self.usage.turn_output_tokens
+        if not session_id or (turn_in == 0 and turn_out == 0):
+            return None
+        total_in, total_out = self.session_store.add_usage(
+            session_id, turn_in, turn_out
+        )
+        ceiling = int((self.config.get("budget", {}) or {}).get("session_tokens", 0))
+        total = total_in + total_out
+        if ceiling > 0 and total >= ceiling and session_id not in self._budget_warned:
+            self._budget_warned.add(session_id)
+            return (
+                f"[budget] session tokens {total} reached the configured ceiling "
+                f"({ceiling}). /new starts a fresh session; adjust "
+                "budget.session_tokens in config.yaml to change this warning."
+            )
+        return None
+
     def status_line(self) -> str:
         preset = self.approvals.preset
         grants = [k for k, v in autonomy_from_config(self.config).items() if v]
@@ -417,7 +441,9 @@ class Repl:
     def run_once(self, message: str) -> str:
         try:
             self.start_turn_clock()
-            return self.agent.run_turn(message)
+            reply = self.agent.run_turn(message)
+            self.finish_turn()  # persist usage; warning suppressed (one-shot)
+            return reply
         finally:
             self.close()
 
@@ -452,6 +478,9 @@ class Repl:
                         print()
                     else:
                         print(f"\n{reply}\n")
+                    warning = self.finish_turn()
+                    if warning:
+                        print(warning)
                 except KeyboardInterrupt:
                     # run_turn already repaired history for the next turn.
                     if self.stream_sink is not None:

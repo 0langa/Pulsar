@@ -47,6 +47,7 @@ class TuiController:
 
     def __init__(self, repl: Repl):
         self.repl = repl
+        self.last_warning: str | None = None
 
     @staticmethod
     def parse_input(line: str) -> TuiCommand:
@@ -124,7 +125,12 @@ class TuiController:
 
     def run_message(self, text: str) -> str:
         self.repl.start_turn_clock()
-        return self.repl.agent.run_turn(text)
+        self.last_warning = None
+        reply = self.repl.agent.run_turn(text)
+        # Kept separate from the reply: a streamed turn skips writing the
+        # reply (already in the transcript) but must still show the warning.
+        self.last_warning = self.repl.finish_turn()
+        return reply
 
 
 def run_tui(home, config, workspace) -> int:
@@ -350,6 +356,8 @@ def _build_app(repl: Repl, startup_lines: list[str]):
                     sink.flush()
                 else:
                     self.call_from_thread(self._write, reply)
+                if controller.last_warning:
+                    self.call_from_thread(self._write, controller.last_warning)
             except Exception as exc:
                 if repl.stream_sink is not None:
                     repl.stream_sink.flush()

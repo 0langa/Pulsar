@@ -69,9 +69,15 @@ def _sessions_command(args: argparse.Namespace, home: Path) -> int:
                 print("no sessions")
                 return 0
             for session in sessions:
+                tokens = ""
+                if session.get("input_tokens") or session.get("output_tokens"):
+                    tokens = (
+                        f"  [{session['input_tokens']}/"
+                        f"{session['output_tokens']} tok]"
+                    )
                 print(
                     f"{session['id']}  {session['updated_at']}  "
-                    f"[{session['message_count']} msgs]  {session['title'][:50]}"
+                    f"[{session['message_count']} msgs]{tokens}  {session['title'][:50]}"
                 )
             return 0
         if args.sessions_command == "delete":

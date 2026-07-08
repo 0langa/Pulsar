@@ -103,6 +103,79 @@ def test_subagent_usage_folds_into_parent_tracker(workspace, home, config):
         repl.close()
 
 
+def test_session_usage_persisted(workspace, home, config):
+    from pulsar_agent.cli.repl import Repl
+
+    config["model"] = "mock:echo"
+    repl = Repl(home=home, config=config, workspace=workspace, interactive=False)
+    try:
+        session_id = repl.agent.context.session_id
+        repl.start_turn_clock()
+        repl.agent.run_turn("count me")
+        assert repl.finish_turn() is None  # no budget configured
+        sessions = {s["id"]: s for s in repl.session_store.list_sessions()}
+        assert sessions[session_id]["input_tokens"] == 10
+        assert sessions[session_id]["output_tokens"] == 5
+        # Second turn accumulates.
+        repl.start_turn_clock()
+        repl.agent.run_turn("again")
+        repl.finish_turn()
+        sessions = {s["id"]: s for s in repl.session_store.list_sessions()}
+        assert sessions[session_id]["input_tokens"] == 20
+    finally:
+        repl.close()
+
+
+def test_session_budget_warns_once(workspace, home, config):
+    from pulsar_agent.cli.repl import Repl
+
+    config["model"] = "mock:echo"
+    config["budget"] = {"session_tokens": 12}  # first turn (15 tok) crosses it
+    repl = Repl(home=home, config=config, workspace=workspace, interactive=False)
+    try:
+        repl.start_turn_clock()
+        repl.agent.run_turn("one")
+        warning = repl.finish_turn()
+        assert warning is not None and "budget" in warning
+        repl.start_turn_clock()
+        repl.agent.run_turn("two")
+        assert repl.finish_turn() is None  # warned once per session
+        # A new session gets its own warning budget.
+        repl._build_agent(new_session=True)
+        repl.start_turn_clock()
+        repl.agent.run_turn("three")
+        assert repl.finish_turn() is not None
+    finally:
+        repl.close()
+
+
+def test_store_usage_migration_on_existing_db(tmp_path):
+    # A pre-usage-column database gains the columns on open.
+    import sqlite3
+
+    from pulsar_agent.sessions.store import SessionStore
+
+    db_path = tmp_path / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL, title TEXT DEFAULT '', workspace TEXT DEFAULT '',"
+        " model_id TEXT DEFAULT '');"
+    )
+    conn.execute(
+        "INSERT INTO sessions VALUES ('old1', '2026-01-01', '2026-01-01', '', '', '')"
+    )
+    conn.commit()
+    conn.close()
+    store = SessionStore(db_path)
+    try:
+        assert store.add_usage("old1", 7, 3) == (7, 3)
+        row = {s["id"]: s for s in store.list_sessions()}["old1"]
+        assert (row["input_tokens"], row["output_tokens"]) == (7, 3)
+    finally:
+        store.close()
+
+
 def test_usage_slash_command(workspace, home, config, capsys):
     from pulsar_agent.cli.repl import Repl
 

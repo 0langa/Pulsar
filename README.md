@@ -170,7 +170,7 @@ Assistant text streams line-by-line as it arrives (SSE) in the REPL and TUI. On 
 
 `/model`, `/usage`, `/tools`, `/map`, `/memory`, `/skills`, `/mcp`, `/checkpoint`, `/rollback`, `/reset`, `/new`, `/help`, `/quit`
 
-`/usage` shows request/token counts for the current run (subagent calls included) and, when you set `pricing.input_per_mtok` / `pricing.output_per_mtok` in `config.yaml`, a dollar figure. Pulsar ships no price table — you configure the prices your provider charges.
+`/usage` shows request/token counts for the current run (subagent calls included) and, when you set `pricing.input_per_mtok` / `pricing.output_per_mtok` in `config.yaml`, a dollar figure. Pulsar ships no price table — you configure the prices your provider charges. Per-session totals persist in the session database and show in `pulsar sessions list`; set `budget.session_tokens` to get a one-time warning when a session crosses that many tokens.
 
 ## Security
 

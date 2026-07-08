@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TEXT NOT NULL,
     title TEXT DEFAULT '',
     workspace TEXT DEFAULT '',
-    model_id TEXT DEFAULT ''
+    model_id TEXT DEFAULT '',
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +66,20 @@ class SessionStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate_columns()
         self._conn.commit()
+
+    def _migrate_columns(self) -> None:
+        """Add columns introduced after a DB was first created; CREATE TABLE
+        IF NOT EXISTS never alters an existing table."""
+        existing = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(sessions)")
+        }
+        for column in ("input_tokens", "output_tokens"):
+            if column not in existing:
+                self._conn.execute(
+                    f"ALTER TABLE sessions ADD COLUMN {column} INTEGER DEFAULT 0"
+                )
 
     def close(self) -> None:
         with self._lock:
@@ -108,15 +123,37 @@ class SessionStore:
             self._conn.commit()
         return int(message_id or 0)
 
+    def add_usage(
+        self, session_id: str, input_tokens: int, output_tokens: int
+    ) -> tuple[int, int]:
+        """Accumulate a turn's token counts onto the session row; returns the
+        session's new (input, output) totals."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET input_tokens = input_tokens + ?,"
+                " output_tokens = output_tokens + ? WHERE id = ?",
+                (max(0, int(input_tokens)), max(0, int(output_tokens)), session_id),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT input_tokens, output_tokens FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        return (int(row[0]), int(row[1])) if row else (0, 0)
+
     def list_sessions(self, limit: int = 20) -> list[dict]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, created_at, updated_at, title, workspace, model_id,"
+                " input_tokens, output_tokens,"
                 " (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count"
                 " FROM sessions s ORDER BY updated_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        keys = ("id", "created_at", "updated_at", "title", "workspace", "model_id", "message_count")
+        keys = (
+            "id", "created_at", "updated_at", "title", "workspace", "model_id",
+            "input_tokens", "output_tokens", "message_count",
+        )
         return [dict(zip(keys, row, strict=False)) for row in rows]
 
     def get_messages(self, session_id: str) -> list[dict]:
