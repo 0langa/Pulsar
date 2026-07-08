@@ -39,7 +39,7 @@ pip install "pulsar-agent[tui]"
 pulsar --tui
 ```
 
-Full-screen terminal UI on [Textual](https://textual.textualize.io/): status bar (model, session, approval preset, checkpoints, backend), scrolling transcript with live tool activity, input composer, and modal approval prompts. `/help`, `/model`, `/reset`, `/quit` work inside it. The classic CLI stays the default; without the `tui` extra (or on terminals Textual cannot drive) `pulsar --tui` exits with installation guidance instead of a traceback.
+Full-screen terminal UI on [Textual](https://textual.textualize.io/): status bar (model, session, approval preset, checkpoints, backend, token totals), scrolling transcript with live tool activity, input composer, and modal approval prompts. `/help`, `/model`, `/memory`, `/usage`, `/reset`, `/quit` work inside it. The classic CLI stays the default; without the `tui` extra (or on terminals Textual cannot drive) `pulsar --tui` exits with installation guidance instead of a traceback.
 
 ## Project awareness
 
@@ -164,7 +164,9 @@ Subprocess environment handling is allowlist-first by default (`terminal.env_mod
 
 ## Slash commands
 
-`/model`, `/tools`, `/map`, `/memory`, `/skills`, `/checkpoint`, `/rollback`, `/reset`, `/new`, `/help`, `/quit`
+`/model`, `/usage`, `/tools`, `/map`, `/memory`, `/skills`, `/checkpoint`, `/rollback`, `/reset`, `/new`, `/help`, `/quit`
+
+`/usage` shows request/token counts for the current run (subagent calls included) and, when you set `pricing.input_per_mtok` / `pricing.output_per_mtok` in `config.yaml`, a dollar figure. Pulsar ships no price table — you configure the prices your provider charges.
 
 ## Security
 

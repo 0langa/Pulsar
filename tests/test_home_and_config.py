@@ -7,6 +7,7 @@ import pytest
 from pulsar_agent.config import (
     DEFAULT_CONFIG,
     ConfigError,
+    config_warnings,
     deep_merge,
     load_config,
     save_config,
@@ -81,3 +82,39 @@ def test_invalid_preset_rejected():
     config = deep_merge(DEFAULT_CONFIG, {"approval_preset": "yolo"})
     with pytest.raises(ConfigError):
         validate_config(config)
+
+
+def test_docker_network_rejects_custom_network():
+    config = deep_merge(DEFAULT_CONFIG, {"docker": {"network": "my-custom-net"}})
+    with pytest.raises(ConfigError, match=r"docker\.network"):
+        validate_config(config)
+
+
+def test_docker_network_builtins_accepted():
+    for network in ("none", "bridge", "host"):
+        config = deep_merge(DEFAULT_CONFIG, {"docker": {"network": network}})
+        validate_config(config)
+
+
+def test_docker_image_must_be_nonempty_string():
+    for bad in ("", "   ", 42, None):
+        config = deep_merge(DEFAULT_CONFIG, {"docker": {"image": bad}})
+        with pytest.raises(ConfigError, match=r"docker\.image"):
+            validate_config(config)
+
+
+def test_host_network_warns_only_with_docker_backend():
+    config = deep_merge(
+        DEFAULT_CONFIG,
+        {"terminal": {"backend": "docker"}, "docker": {"network": "host"}},
+    )
+    warnings = config_warnings(config)
+    assert len(warnings) == 1
+    assert "host" in warnings[0]
+
+    # Same network setting is silent while the local backend is active.
+    config = deep_merge(DEFAULT_CONFIG, {"docker": {"network": "host"}})
+    assert config_warnings(config) == []
+
+    # Default config produces no advisory noise.
+    assert config_warnings(deep_merge(DEFAULT_CONFIG, {})) == []

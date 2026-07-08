@@ -15,6 +15,7 @@ from pathlib import Path
 from pulsar_agent.security.approvals import ApprovalManager
 from pulsar_agent.security.paths import PathPolicy
 from pulsar_agent.security.redaction import Redactor
+from pulsar_agent.usage import UsageTracker
 
 MAX_TOOL_RESULT_CHARS = 30000
 
@@ -36,6 +37,8 @@ class ToolContext:
     runtime_provider: object | None = None
     transport: object | None = None
     on_tool_event: Callable[[str, str], None] | None = None
+    # Shared token/cost counters; subagents inherit the parent's tracker.
+    usage: UsageTracker = field(default_factory=UsageTracker)
 
     def emit(self, event: str, detail: str) -> None:
         if self.on_tool_event:

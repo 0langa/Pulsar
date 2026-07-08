@@ -14,6 +14,7 @@ from pulsar_agent.providers.router import (
 from pulsar_agent.secrets import SecretStore
 from pulsar_agent.sessions.store import SessionStore
 from pulsar_agent.tools.registry import ToolContext, ToolRegistry
+from pulsar_agent.usage import UsageTracker
 
 DEFAULT_MAX_ITERATIONS = 40
 
@@ -32,6 +33,8 @@ class Agent:
     # Cooperative cancel: checked before each iteration so a running turn stops
     # making provider calls / tool actions once the TUI user quits.
     should_cancel: Callable[[], bool] | None = None
+    # Shared with subagents so delegated work counts toward the same totals.
+    usage: UsageTracker = field(default_factory=UsageTracker)
     messages: list[dict] = field(default_factory=list)
     _tool_schemas: list[dict] | None = None
 
@@ -81,9 +84,11 @@ class Agent:
         last_error: ProviderError | None = None
         for index, transport in enumerate(transports):
             try:
-                return transport.complete(
+                result = transport.complete(
                     self.system_prompt, self.messages, self._schemas(), self.max_tokens
                 )
+                self.usage.record(result.usage)
+                return result
             except ProviderError as exc:
                 last_error = exc
                 if not exc.retryable or index == len(transports) - 1:
@@ -92,6 +97,9 @@ class Agent:
         raise last_error or ProviderError("no transports configured")
 
     def run_turn(self, user_text: str) -> str:
+        if not self.context.is_subagent:
+            # Subagent turns fold into the delegating turn's counters.
+            self.usage.start_turn()
         self.messages.append({"role": "user", "content": user_text})
         self._persist("user", user_text)
         try:
@@ -195,6 +203,7 @@ def run_subagent(parent_context: ToolContext, role: str, goal: str, budget: int)
         subagent_role=role,
         transport=parent_context.transport,
         on_tool_event=parent_context.on_tool_event,
+        usage=parent_context.usage,
     )
     system_prompt = build_system_prompt(
         workspace=parent_context.workspace,
@@ -212,6 +221,7 @@ def run_subagent(parent_context: ToolContext, role: str, goal: str, budget: int)
         system_prompt=system_prompt,
         session_store=None,
         max_iterations=budget,
+        usage=parent_context.usage,
     )
     try:
         summary = agent.run_turn(f"Goal: {goal}")

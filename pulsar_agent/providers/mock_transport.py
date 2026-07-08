@@ -49,8 +49,14 @@ class MockTransport(Transport):
                 text=step.get("text"),
                 tool_calls=calls,
                 stop_reason="tool_use" if calls else "end_turn",
+                # Deterministic usage so token accounting is testable offline.
+                usage=step.get("usage") or {"input_tokens": 10, "output_tokens": 5},
             )
         last_user = next(
             (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
         )
-        return CompletionResult(text=f"echo: {last_user}", stop_reason="end_turn")
+        return CompletionResult(
+            text=f"echo: {last_user}",
+            stop_reason="end_turn",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )

@@ -68,6 +68,8 @@ class TuiController:
             return TuiCommand("model", arg)
         if command == "/memory":
             return TuiCommand("memory", arg)
+        if command == "/usage":
+            return TuiCommand("usage")
         return TuiCommand("unknown", command)
 
     def status_text(self) -> str:
@@ -78,13 +80,14 @@ class TuiController:
         return (
             f" pulsar {__version__}  │  model {repl.model_id}  │  "
             f"preset {repl.approvals.preset}  │  session {session}  │  "
-            f"checkpoints {checkpoints}  │  backend {backend} "
+            f"checkpoints {checkpoints}  │  backend {backend}  │  "
+            f"{repl.usage.status_fragment()} "
         )
 
     def help_text(self) -> str:
         return (
             "TUI commands: /model [provider:model], /memory [approve|discard], "
-            "/reset, /help, /quit\n"
+            "/usage, /reset, /help, /quit\n"
             "Everything else is sent to the agent.\n\n"
             "Classic-CLI command reference:\n" + HELP_TEXT
         )
@@ -106,6 +109,9 @@ class TuiController:
                 "/memory approve or /memory discard"
             )
         return snapshot
+
+    def usage_summary(self) -> str:
+        return self.repl.usage.summary(self.repl.config.get("pricing"))
 
     def reset(self) -> str:
         self.repl.agent.reset()
@@ -171,6 +177,15 @@ def _build_app(repl: Repl, startup_lines: list[str]):
             self._request = request
             self._done = done
             self._result = result
+            self._closed = False
+
+        def on_mount(self) -> None:
+            # Deny-and-dismiss from the screen's own timer when the user never
+            # answers, so no stale modal lingers after the waiting thread has
+            # already timed out. Runs on the UI thread through the same
+            # _finish path as a button press (a cross-thread pop_screen can
+            # deadlock textual's screen-close await chain).
+            self.set_timer(APPROVAL_WAIT_SECONDS, lambda: self._finish(False))
 
         def compose(self) -> ComposeResult:
             request = self._request
@@ -200,11 +215,20 @@ def _build_app(repl: Repl, startup_lines: list[str]):
                 self._finish(False)
 
         def _finish(self, approved: bool) -> None:
+            # Idempotent: the first of {user click, key, timeout timer} wins
+            # and later ones are no-ops, so a late click cannot re-answer.
+            if self._closed:
+                return
+            self._closed = True
             self._result["approved"] = approved
             self._done.set()
             self.app.pop_screen()
 
     class PulsarTui(App):
+        # Set after construction; the screen class is closure-local so tests
+        # can build one without re-importing textual internals.
+        approval_screen_factory: type
+
         TITLE = "pulsar"
         CSS = """
         #status { height: 1; background: $surface; color: $text; }
@@ -260,12 +284,14 @@ def _build_app(repl: Repl, startup_lines: list[str]):
                 return False
             done = threading.Event()
             result: dict = {}
+            screen = ApprovalScreen(request, done, result)
             self._pending_approvals.add(done)
             try:
-                self.call_from_thread(
-                    self.push_screen, ApprovalScreen(request, done, result)
-                )
-                done.wait(timeout=APPROVAL_WAIT_SECONDS)
+                self.call_from_thread(self.push_screen, screen)
+                # The screen's own timer denies-and-dismisses at
+                # APPROVAL_WAIT_SECONDS; the margin here is only a backstop
+                # against a wedged UI so this worker thread can never hang.
+                done.wait(timeout=APPROVAL_WAIT_SECONDS + 30)
             finally:
                 self._pending_approvals.discard(done)
             # Deny on shutdown or timeout (result unset).
@@ -288,6 +314,9 @@ def _build_app(repl: Repl, startup_lines: list[str]):
                 return
             if command.kind == "memory":
                 self._write(controller.memory(command.arg))
+                return
+            if command.kind == "usage":
+                self._write(controller.usage_summary())
                 return
             if command.kind == "model":
                 self._write(controller.switch_model(command.arg))
@@ -317,6 +346,7 @@ def _build_app(repl: Repl, startup_lines: list[str]):
                 # The app may already be tearing down; ignore if so.
                 try:
                     self.call_from_thread(self._enable_composer)
+                    self.call_from_thread(self._refresh_status)
                 except Exception:
                     pass
 
@@ -325,4 +355,7 @@ def _build_app(repl: Repl, startup_lines: list[str]):
             composer.disabled = False
             composer.focus()
 
-    return PulsarTui()
+    app = PulsarTui()
+    # Exposed for tests: the class is closure-local for lazy textual import.
+    app.approval_screen_factory = ApprovalScreen
+    return app

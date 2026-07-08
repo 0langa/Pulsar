@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from pulsar_agent import __version__
-from pulsar_agent.config import ConfigError, load_config, save_config
+from pulsar_agent.config import ConfigError, config_warnings, load_config, save_config
 from pulsar_agent.home import ensure_home_layout, get_pulsar_home
 from pulsar_agent.providers.router import parse_model_id
 
@@ -109,12 +109,22 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
+    for warning in config_warnings(config):
+        print(f"warning: {warning}", file=sys.stderr)
 
     if args.command == "model":
+        # Resolve fully (provider profile + key presence) before persisting so
+        # a format-valid but unusable id never bricks the next startup — same
+        # guarantee the interactive /model command gives.
+        from pulsar_agent.providers.router import resolve_runtime_provider
+        from pulsar_agent.secrets import SecretStore
+
         try:
             parse_model_id(args.model_id)
+            resolve_runtime_provider(args.model_id, config, SecretStore(home))
         except Exception as exc:
-            print(f"invalid model id: {exc}", file=sys.stderr)
+            print(f"cannot set model: {exc}", file=sys.stderr)
+            print("Hint: run `pulsar setup` to configure the provider and key.", file=sys.stderr)
             return 2
         config["model"] = args.model_id
         save_config(home, config)

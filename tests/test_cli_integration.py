@@ -78,6 +78,19 @@ def test_model_command_rejects_bad_id(tmp_path):
     assert result.returncode == 2
 
 
+def test_model_command_rejects_unresolvable_id(tmp_path):
+    # Format-valid id whose provider key is absent must not be persisted
+    # (run_cli strips OPENAI_API_KEY from the environment).
+    home = tmp_path / "h"
+    result = run_cli(["model", "openai:gpt-4o"], home=home)
+    assert result.returncode == 2
+    assert "cannot set model" in result.stderr
+    config_path = home / "config.yaml"
+    if config_path.exists():
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config.get("model") != "openai:gpt-4o"
+
+
 def test_once_with_mock_provider(tmp_path):
     home = tmp_path / "h"
     workspace = tmp_path / "ws"

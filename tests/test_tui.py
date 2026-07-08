@@ -58,6 +58,7 @@ def test_run_tui_without_textual(monkeypatch, capsys, tmp_path):
         ("/reset", "reset", ""),
         ("/model", "model", ""),
         ("/model mock:echo", "model", "mock:echo"),
+        ("/usage", "usage", ""),
         ("/bogus", "unknown", "/bogus"),
     ],
 )
@@ -79,6 +80,7 @@ def test_controller_status_and_flow(workspace, home, config):
 
         assert "TUI commands" in controller.help_text()
         assert controller.run_message("ping") == "echo: ping"
+        assert "in / " in controller.usage_summary()
         assert "cleared" in controller.reset()
 
         assert "active model: mock:echo" in controller.switch_model("")
@@ -137,6 +139,50 @@ def test_tui_app_message_flow(workspace, home, config):
             assert "startup-line" in text
             assert "> hello tui" in text
             assert "echo: hello tui" in text
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        repl.close()
+
+
+def test_tui_approval_modal_dismissed_after_timeout(workspace, home, config, monkeypatch):
+    # Regression: when nobody answers, the modal's own timer must deny the
+    # request and dismiss the screen — no stale modal lingering, and a late
+    # click must be a no-op. Driven on the UI thread: a cross-thread approver
+    # round-trip under run_test can hit a Windows proactor wakeup race.
+    import threading
+
+    pytest.importorskip("textual")
+    from pulsar_agent.security.approvals import ApprovalRequest
+
+    monkeypatch.setattr(tui_module, "APPROVAL_WAIT_SECONDS", 0.05)
+    repl = make_mock_repl(workspace, home, config)
+    app = tui_module._build_app(repl, startup_lines=[])
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            done = threading.Event()
+            result: dict = {}
+            request = ApprovalRequest(kind="terminal", description="pretend command")
+            screen = app.approval_screen_factory(request, done, result)
+            app.push_screen(screen)
+            await pilot.pause()
+            # Let the screen's timeout timer fire. (No screen-presence assert
+            # before this: under load the timer can win the race with pause().)
+            deadline = 50  # x 0.1s
+            while not done.is_set() and deadline:
+                await asyncio.sleep(0.1)
+                deadline -= 1
+            assert done.is_set(), "timeout timer never fired"
+            assert result.get("approved") is False  # timeout denies
+            await pilot.pause()
+            assert not any(
+                type(s).__name__ == "ApprovalScreen" for s in app.screen_stack
+            ), "stale approval modal must be dismissed after timeout"
+            # A late answer cannot flip the already-recorded denial.
+            screen._finish(True)
+            assert result.get("approved") is False
 
     try:
         asyncio.run(scenario())

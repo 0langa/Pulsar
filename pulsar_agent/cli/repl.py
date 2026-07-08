@@ -33,10 +33,12 @@ from pulsar_agent.sessions.store import DB_FILENAME, SessionStore
 from pulsar_agent.skills.loader import builtin_skills_dir, discover_skills
 from pulsar_agent.tools import build_core_registry
 from pulsar_agent.tools.registry import ToolContext
+from pulsar_agent.usage import UsageTracker
 
 HELP_TEXT = """\
 Slash commands:
   /model [provider:model]  show or switch the active model
+  /usage                   token counts and cost for this run
   /tools                   list enabled tools
   /map                     show the project map and git status
   /memory [approve|discard] show memory; apply/discard staged writes
@@ -111,6 +113,8 @@ class Repl:
         self._turn_started = 0.0
         self._tool_counter = 0
         self._cancelled = False
+        # One tracker for the whole run; survives model switches and /new.
+        self.usage = UsageTracker()
         self.secrets = SecretStore(home)
         self.redactor = Redactor(
             known_values=self.secrets.all_values(),
@@ -178,6 +182,7 @@ class Repl:
             runtime_provider=runtime,
             transport=transport,
             on_tool_event=self._emit_tool_event,
+            usage=self.usage,
         )
         system_prompt = build_system_prompt(
             workspace=self.workspace,
@@ -206,6 +211,7 @@ class Repl:
             # still receives assistant text.
             on_assistant_text=self._emit_assistant_text,
             should_cancel=lambda: self._cancelled,
+            usage=self.usage,
         )
 
     def _emit_assistant_text(self, text: str) -> None:
@@ -279,6 +285,8 @@ class Repl:
             print(HELP_TEXT)
         elif command == "/model":
             print(self.switch_model(arg))
+        elif command == "/usage":
+            print(self.usage.summary(self.config.get("pricing")))
         elif command == "/tools":
             for spec in self.agent.registry.enabled(self.agent.context):
                 print(f"- {spec.name}: {spec.description.splitlines()[0][:90]}")

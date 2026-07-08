@@ -11,6 +11,8 @@ A local-first, single-user coding agent. Terminal-native. Reads/edits files, sea
 - Public repo: https://github.com/0langa/Pulsar (`origin`, branch `main`).
 - MVP shipped (commits `68f71cf`, `ffc862f`).
 - Beta expansion Bars 1-8 done (safety hardening, Docker backend, MCP client, web retrieval, TUI, repo intelligence, production hygiene, e2e verification + self-audit). Tracked bar-by-bar in `WORK_STATUS.md`.
+- Post-beta pass 1 done: CI workflow pushed and green on GitHub; docker network/image validation + host-network startup warning; `pulsar model` resolves before persisting; TUI stale approval modal auto-dismisses; per-session token/cost accounting (`/usage`).
+- Pushing `.github/workflows/` changes needs the keyring `gh` credential (`workflow` scope): `env -u GITHUB_TOKEN git push`.
 - `research/` is local-only reference and git-ignored. Never commit it. `START_HERE.md` and `docs/HANDOFF_AUDIT.md` are git-ignored (machine-specific paths).
 
 ## Architecture map
@@ -20,7 +22,9 @@ Package `pulsar_agent` (dist `pulsar-agent`). Python 3.11+. Runtime deps kept sm
 ```
 pulsar_agent/
   home.py            PULSAR_HOME resolution + layout (default ~/.pulsar)
-  config.py          config.yaml load/merge/validate; inline secrets rejected
+  config.py          config.yaml load/merge/validate; inline secrets rejected;
+                     config_warnings() advisories (e.g. docker host network)
+  usage.py           UsageTracker: per-run token/cost accounting (/usage)
   secrets.py         .env-only secret store; never exported to os.environ
   prompt_builder.py  stable system prompt (identity, memory, skills, project ctx)
   run_agent.py       synchronous ReAct loop; subagent runner; runtime builder
@@ -80,8 +84,9 @@ pulsar_agent/
 - Memory: bounded Markdown, staged writes with approval.
 - Skills: builtin + user; one builtin (`python-test-and-fix`).
 - Checkpoints: shadow-git, reversible rollback.
-- CLI: REPL, slash commands (incl. `/map`), setup wizard, sessions subcommands, `--once`; tool progress lines with per-turn counter + elapsed time; recovery hints on common failures.
-- TUI: `pulsar --tui` (textual extra), status bar, transcript, composer, modal approvals from worker thread, graceful fallback without the dependency.
+- CLI: REPL, slash commands (incl. `/map`, `/usage`), setup wizard, sessions subcommands, `--once`; tool progress lines with per-turn counter + elapsed time; recovery hints on common failures.
+- TUI: `pulsar --tui` (textual extra), status bar (incl. token totals), transcript, composer, modal approvals from worker thread (stale modals auto-dismiss), graceful fallback without the dependency.
+- Usage accounting: one `UsageTracker` per run shared by main agent and subagents; `/usage` shows requests, tokens (total + last turn), cache counters, and cost when `pricing.*_per_mtok` is configured.
 - Repo intelligence (`intel.py`): project map (languages, tooling, package managers, key files, CI), test-command inference + targeted-test helper, git summary + diffstat; injected into system prompt as untrusted data.
 - Hygiene: ruff + mypy + bandit + pip-audit configured and passing; GitHub Actions CI (tests on Linux/Windows py3.11-3.12, lint, type check, security scans); coverage via pytest-cov.
 
@@ -115,28 +120,16 @@ pulsar_agent/
 Recorded from the Bar 1-8 release self-audit. All P0/P1 were fixed in-pass; the
 items below are accepted with rationale and a next step.
 
-- **P3 — Docker `network`/`image` config is not validated (isolation, not injection).** Files: `pulsar_agent/tools/docker_backend.py`, `config.py`. argv is list-form so there is no shell injection, but `docker.network: host` or a swapped image silently weakens the isolation the backend advertises. Risk: a user who edits their own config can reduce their own sandbox — not a model-reachable escalation. Deferred because it is user-controlled config, not attacker-controlled. Next step: validate `network` against `{none, bridge, host}` and warn (not block) on `host`.
-- **P3 — `pulsar model <id>` (CLI subcommand) validates format only, not resolvability.** File: `pulsar_agent/cli/main.py`. A format-valid but unusable id (e.g. missing key) is saved; the next launch fails with exit 2 plus a `pulsar setup` hint. The interactive `/model` path was hardened to rebuild-before-persist; the one-shot subcommand still writes optimistically. Deferred because full resolution needs the key/secret store and the failure is self-explanatory. Next step: attempt `resolve_runtime_provider` before saving in the subcommand.
-- **P3 — TUI approval modal left after a timeout is cosmetic-stale.** File: `pulsar_agent/cli/tui.py`. On the 600 s approval timeout the request is already denied; a late click on the lingering modal is a no-op but confusing, and the modal blocks input until dismissed. Shutdown now releases pending waits (fixed), but the timeout-then-click cosmetic remains. Next step: auto-dismiss the modal from a timer when its `done` event fires.
+- ~~P3 — Docker `network`/`image` config not validated~~ **Fixed in post-beta pass 1**: `network` restricted to `{none, bridge, host}`, `image` must be a non-empty string, startup advisory via `config_warnings()` when the docker backend uses `host`.
+- ~~P3 — `pulsar model <id>` validates format only~~ **Fixed in post-beta pass 1**: the subcommand resolves the provider (profile + key presence) before persisting.
+- ~~P3 — TUI approval modal cosmetic-stale after timeout~~ **Fixed in post-beta pass 1**: the modal denies-and-dismisses from its own `set_timer` (UI thread, same idempotent `_finish` path as a click); the worker keeps only a backstop wait. Do NOT pop a textual screen cross-thread — it deadlocks the screen-close await chain (verified with task-stack probes).
 - **P3 — Redactor ignores known secrets shorter than 6 chars.** File: `pulsar_agent/security/redaction.py`. The `len >= 6` gate avoids masking noise, but a very short secret would pass through. Deferred because lowering the threshold produces heavy false-positive redaction of ordinary short tokens. Next step: mask short values only on word boundaries, or make the floor configurable.
 - **P3 — Cooperative cancel is between-iteration, not mid-tool.** Files: `pulsar_agent/run_agent.py`, `cli/tui.py`. Quitting the TUI stops further provider calls and tool dispatches, but a tool already executing (e.g. a long subprocess) runs to completion before the turn unwinds. Deferred because true preemption of a synchronous subprocess needs a process-group kill path. Next step: thread a cancel token into the terminal/docker backends to kill the child on cancel.
-
-## Deferred ideas (valuable, outside current pass)
-
-- OS keychain secret backend (currently `.env` only).
-- Vector/embedding session recall (currently FTS5 only).
-- SSH / remote terminal backends.
-- Provider plugin loading from `PULSAR_HOME/plugins`.
-- MCP HTTP/SSE transport (stdio only today); MCP server auto-restart/reconnect; MCP resources and prompts (tools only today).
-- Smart/LLM-assisted approval classification.
-- Skill hub / install flow.
-- Docker: image pre-pull/health check at startup; per-command container reuse for speed; rootless podman support.
-- Web: HTML cache with ETag revalidation; per-domain rate limiting; resolve-then-pin connections to close the DNS-rebinding gap; `/web` slash command for manual fetches.
-- REPL `/mcp` slash command showing server status + discovered tools.
 
 ## Recommended next additions (after this pass)
 
 - Streaming token output in CLI/TUI.
-- Cost/token budget accounting surfaced per session.
+- ~~Cost/token budget accounting surfaced per session~~ — done (post-beta pass 1, `usage.py`, `/usage`). Possible follow-ups: persist totals per session in SQLite; budget warnings at a configured token ceiling.
 - Richer diff rendering in TUI.
 - Config schema versioning + migration harness.
+- Mid-tool cancellation (thread a cancel token into terminal/docker backends; today cancel is between-iteration).

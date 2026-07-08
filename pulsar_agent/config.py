@@ -70,6 +70,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_user_chars": 2000,
         "write_approval": True,
     },
+    "pricing": {
+        # USD per million tokens for /usage cost display. 0 disables cost
+        # (token counts always show). User-set — Pulsar ships no price table.
+        "input_per_mtok": 0.0,
+        "output_per_mtok": 0.0,
+    },
     "checkpoints": {
         "enabled": True,
     },
@@ -86,6 +92,7 @@ VALID_API_MODES = ("anthropic_messages", "chat_completions", "custom_openai_comp
 VALID_BACKENDS = ("local", "docker")
 VALID_ENV_MODES = ("allowlist", "scrub")
 VALID_WEB_BACKENDS = ("duckduckgo", "brave")
+VALID_DOCKER_NETWORKS = ("none", "bridge", "host")
 
 MCP_SERVER_REQUIRED = ("name", "command")
 MCP_SERVER_ALLOWED = (
@@ -148,6 +155,19 @@ def validate_config(config: dict) -> None:
     _validate_terminal_and_docker(config)
     _validate_mcp(config)
     _validate_web(config)
+    _validate_pricing(config)
+
+
+def _validate_pricing(config: dict) -> None:
+    pricing = config.get("pricing", {}) or {}
+    for key in ("input_per_mtok", "output_per_mtok"):
+        value = pricing.get(key, 0.0)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ConfigError(f"pricing.{key} must be a number, got {value!r}") from None
+        if number < 0:
+            raise ConfigError(f"pricing.{key} must be >= 0, got {value!r}")
 
 
 def _validate_web(config: dict) -> None:
@@ -181,6 +201,15 @@ def _validate_terminal_and_docker(config: dict) -> None:
     mount = docker.get("workspace_mount", "rw")
     if mount not in ("rw", "ro"):
         raise ConfigError(f"docker.workspace_mount must be 'rw' or 'ro', got {mount!r}")
+    network = docker.get("network", "none")
+    if network not in VALID_DOCKER_NETWORKS:
+        raise ConfigError(
+            f"docker.network must be one of {VALID_DOCKER_NETWORKS}, got {network!r}; "
+            "custom docker networks are not supported by the hardened backend"
+        )
+    image = docker.get("image", "python:3.11-slim")
+    if not isinstance(image, str) or not image.strip():
+        raise ConfigError(f"docker.image must be a non-empty string, got {image!r}")
     for banned in INLINE_SECRET_KEYS:
         if banned in {k.lower() for k in docker.get("env_allowlist", []) if isinstance(k, str)}:
             raise ConfigError(
@@ -218,6 +247,25 @@ def _validate_mcp(config: dict) -> None:
             raise ConfigError(
                 f"mcp server {name!r} has unknown fields: {unknown}"
             )
+
+
+def config_warnings(config: dict) -> list[str]:
+    """Advisory (non-fatal) findings: configurations that are valid but weaken
+    a protection the defaults provide. Callers print these at startup."""
+    warnings: list[str] = []
+    terminal = config.get("terminal", {}) or {}
+    docker = config.get("docker", {}) or {}
+    if (
+        str(terminal.get("backend", "local")) == "docker"
+        and docker.get("network", "none") == "host"
+    ):
+        warnings.append(
+            "docker.network is 'host': the container shares the host network "
+            "stack, removing the network isolation the docker backend "
+            "normally provides. Use 'none' (default) or 'bridge' unless you "
+            "need host networking."
+        )
+    return warnings
 
 
 def load_config(home: Path) -> dict:
