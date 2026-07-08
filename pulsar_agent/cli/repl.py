@@ -151,9 +151,11 @@ class Repl:
         # One tracker for the whole run; survives model switches and /new.
         self.usage = UsageTracker()
         self.secrets = SecretStore(home)
+        security_cfg = config.get("security", {}) or {}
         self.redactor = Redactor(
             known_values=self.secrets.all_values(),
-            enabled=bool(config.get("security", {}).get("redact_secrets", True)),
+            enabled=bool(security_cfg.get("redact_secrets", True)),
+            min_length=int(security_cfg.get("redaction_min_length", 3)),
         )
         self.session_store = SessionStore(home / DB_FILENAME, self.redactor)
         self.memory = MemoryStore(home, config, self.redactor)

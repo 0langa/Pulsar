@@ -3,6 +3,11 @@
 Applied before console output, logs, session DB writes, tool results returned
 to the model, and exports. Masks both known secret values and generic
 credential patterns.
+
+Known values of 6+ chars are masked anywhere they appear. Shorter known
+values (down to `min_length`, default 3) are masked only as standalone
+tokens — plain substring replacement would shred ordinary words that happen
+to contain them.
 """
 
 from __future__ import annotations
@@ -10,6 +15,11 @@ from __future__ import annotations
 import re
 
 MASK = "[REDACTED]"
+
+# Hard floor for the configurable minimum: 1-2 char "secrets" would mask
+# single letters across all output.
+ABSOLUTE_MIN_LENGTH = 3
+SUBSTRING_MIN_LENGTH = 6
 
 SECRET_NAME_RE = re.compile(
     r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)", re.IGNORECASE
@@ -33,15 +43,30 @@ _ASSIGNMENT_PATTERN = re.compile(
 
 
 class Redactor:
-    def __init__(self, known_values: list[str] | None = None, enabled: bool = True):
+    def __init__(
+        self,
+        known_values: list[str] | None = None,
+        enabled: bool = True,
+        min_length: int = ABSOLUTE_MIN_LENGTH,
+    ):
         self.enabled = enabled
+        self.min_length = max(ABSOLUTE_MIN_LENGTH, int(min_length))
         self._values: set[str] = set()
+        self._short_patterns: dict[str, re.Pattern] = {}
         for value in known_values or []:
             self.register_value(value)
 
     def register_value(self, value: str | None) -> None:
-        if value and len(value) >= 6:
+        if not value or len(value) < self.min_length:
+            return
+        if len(value) >= SUBSTRING_MIN_LENGTH:
             self._values.add(value)
+        elif value not in self._short_patterns:
+            # Standalone-token match; lookarounds instead of \b so values with
+            # non-word edge characters still anchor correctly.
+            self._short_patterns[value] = re.compile(
+                rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])"
+            )
 
     def redact(self, text: str) -> str:
         if not self.enabled or not text:
@@ -50,6 +75,8 @@ class Redactor:
         for value in self._values:
             if value in out:
                 out = out.replace(value, MASK)
+        for pattern in self._short_patterns.values():
+            out = pattern.sub(MASK, out)
         out = _ASSIGNMENT_PATTERN.sub(
             lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}{MASK}{m.group(4)}", out
         )

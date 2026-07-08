@@ -53,6 +53,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "security": {
         "redact_secrets": True,
+        # Shortest known secret the redactor masks (3-6). 3-5 char values
+        # mask as standalone tokens only; 6+ mask anywhere. 6 disables
+        # short-value masking entirely.
+        "redaction_min_length": 3,
         "command_allowlist": [],
         "autonomy": {
             "allow_writes": False,
@@ -231,6 +235,12 @@ def _validate_pricing(config: dict) -> None:
     if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0:
         raise ConfigError(
             f"budget.session_tokens must be a non-negative integer, got {tokens!r}"
+        )
+    security = config.get("security", {}) or {}
+    floor = security.get("redaction_min_length", 3)
+    if not isinstance(floor, int) or isinstance(floor, bool) or not 3 <= floor <= 6:
+        raise ConfigError(
+            f"security.redaction_min_length must be an integer from 3 to 6, got {floor!r}"
         )
 
 

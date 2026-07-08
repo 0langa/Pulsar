@@ -71,6 +71,46 @@ def test_redactor_masks_patterns():
         assert MASK in out, f"not redacted: {sample}"
 
 
+def test_short_secret_masked_as_standalone_token():
+    redactor = Redactor(["ab12"])
+    out = redactor.redact("value is ab12 here; also (ab12) and ab12,")
+    assert "ab12" not in out
+    assert out.count(MASK) == 3
+
+
+def test_short_secret_not_masked_inside_words():
+    # Substring masking of a 4-char value would shred ordinary words.
+    redactor = Redactor(["pass"])
+    text = "compass passport surpassed"
+    assert redactor.redact(text) == text
+    assert MASK in redactor.redact("the token is pass end")
+
+
+def test_short_secret_with_symbol_edges():
+    redactor = Redactor(["a$b1"])
+    out = redactor.redact("secret: a$b1 done")
+    assert "a$b1" not in out
+
+
+def test_redaction_floor_configurable():
+    # min_length 5: a 4-char secret is intentionally not registered.
+    redactor = Redactor(["ab12", "cd345"], min_length=5)
+    out = redactor.redact("ab12 and cd345")
+    assert "ab12" in out
+    assert "cd345" not in out
+
+
+def test_floor_never_below_absolute_minimum():
+    redactor = Redactor(min_length=1)
+    redactor.register_value("xy")  # 2 chars: below the hard floor of 3
+    assert redactor.redact("xy") == "xy"
+
+
+def test_long_values_still_masked_anywhere():
+    redactor = Redactor([FAKE_KEY])
+    assert FAKE_KEY not in redactor.redact(f"embedded{FAKE_KEY}embedded")
+
+
 def test_redactor_disabled_passthrough():
     redactor = Redactor([FAKE_KEY], enabled=False)
     assert redactor.redact(FAKE_KEY) == FAKE_KEY
